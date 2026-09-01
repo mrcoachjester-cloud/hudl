@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Coach Hudl"
+description = "A football coaching analytics dashboard that imports play-by-play CSV data, surfaces opponent tendencies, and compares live game calls against the scouting report."
+version = "1.0.0"
+id = "artifacts/coach-hudl"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 22106
+
+[services.development]
+run = "pnpm --filter @workspace/coach-hudl run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/coach-hudl", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/coach-hudl/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "22106"
+BASE_PATH = "/"
