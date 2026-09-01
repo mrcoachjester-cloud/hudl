@@ -209,6 +209,12 @@ select { min-width: 122px; }
 .field { display: grid; gap: 6px; }
 .field label { color: hsl(var(--muted-foreground)); font-family: var(--app-font-mono); font-size: 9px; letter-spacing: .07em; text-transform: uppercase; }
 .field .input, .field select { width: 100%; }
+.starting-yard-line { display: flex; align-items: end; gap: 12px; margin: 0 0 16px; padding: 12px; border: 1px solid rgba(164,123,255,.2); border-radius: 10px; background: rgba(164,123,255,.05); }
+.starting-yard-line .field { width: 180px; flex: 0 0 auto; }
+.starting-yard-line > span, .field-hint { color: hsl(var(--muted-foreground)); font-size: 10px; line-height: 1.4; }
+.computed-value { display: flex; align-items: center; min-height: 37px; padding: 10px 11px; border: 1px solid rgba(31,201,139,.28); border-radius: 8px; background: rgba(31,201,139,.08); color: #a9f4d2; font-family: var(--app-font-mono); font-size: 12px; }
+.computed-value.negative { border-color: rgba(239,143,136,.28); background: rgba(239,143,136,.08); color: #ef8f88; }
+.computed-value:not(.positive):not(.negative) { border-color: hsl(var(--border)); background: #16161f; color: hsl(var(--muted-foreground)); }
 .field-wide { grid-column: span 2; }
 .report-list { display: grid; gap: 9px; }
 .report-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px; border: 1px solid hsl(var(--border)); border-radius: 11px; background: rgba(255,255,255,.02); }
@@ -241,6 +247,8 @@ select { min-width: 122px; }
   .panel-pad { padding: 16px; }
   .split-grid, .comparison { grid-template-columns: 1fr; }
   .comparison { gap: 1px; }
+  .starting-yard-line { align-items: stretch; flex-direction: column; }
+  .starting-yard-line .field { width: auto; }
   .form-grid { grid-template-columns: repeat(2, 1fr); }
   .field-wide { grid-column: span 2; }
   .donut-wrap { justify-content: center; flex-wrap: wrap; }
