@@ -215,6 +215,23 @@ select { min-width: 122px; }
 .computed-value { display: flex; align-items: center; min-height: 37px; padding: 10px 11px; border: 1px solid rgba(31,201,139,.28); border-radius: 8px; background: rgba(31,201,139,.08); color: #a9f4d2; font-family: var(--app-font-mono); font-size: 12px; }
 .computed-value.negative { border-color: rgba(239,143,136,.28); background: rgba(239,143,136,.08); color: #ef8f88; }
 .computed-value:not(.positive):not(.negative) { border-color: hsl(var(--border)); background: #16161f; color: hsl(var(--muted-foreground)); }
+.table-input { width: 100%; min-width: 72px; padding: 7px 8px; border: 1px solid transparent; border-radius: 6px; background: rgba(255,255,255,.03); color: #f4f0ff; font: inherit; font-size: 11px; }
+.table-input:hover, .table-input:focus { border-color: rgba(164,123,255,.45); background: #1b1925; outline: none; }
+.live-sheet th, .live-sheet td { white-space: nowrap; }
+.live-sheet td { min-width: 92px; }
+.live-sheet td:first-child, .live-sheet td:nth-child(10), .live-sheet td:last-child { min-width: 54px; }
+.gain-positive { color: #62dfae; font-family: var(--app-font-mono); }
+.gain-negative { color: #ef8f88; font-family: var(--app-font-mono); }
+.report-tabs { margin-bottom: 14px; }
+.schedule-form { margin-bottom: 16px; }
+.schedule-list { padding: 8px 21px 21px; }
+.schedule-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid rgba(255,255,255,.06); }
+.schedule-row:first-child { border-top: 0; }
+.schedule-row.selected-schedule { margin: 0 -10px; padding-left: 10px; padding-right: 10px; border-radius: 9px; background: rgba(164,123,255,.08); }
+.schedule-select { display: grid; flex: 1; gap: 4px; padding: 0; border: 0; background: transparent; color: #f4f0ff; text-align: left; cursor: pointer; }
+.schedule-select strong { font-family: 'Space Grotesk'; font-size: 13px; }
+.schedule-select span { color: hsl(var(--muted-foreground)); font-size: 10px; }
+.schedule-date { font-family: var(--app-font-mono); font-size: 9px !important; letter-spacing: .05em; text-transform: uppercase; }
 .field-wide { grid-column: span 2; }
 .report-list { display: grid; gap: 9px; }
 .report-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 15px; border: 1px solid hsl(var(--border)); border-radius: 11px; background: rgba(255,255,255,.02); }
