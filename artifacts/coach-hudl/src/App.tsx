@@ -1,4 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { getGames, getSeasons } from './lib/footballData';
 import { Check, ChevronRight, CircleAlert, ClipboardList, Download, FileSpreadsheet, Film, LayoutDashboard, Menu, Plus, RefreshCw, Search, Shield, Sparkles, Target, Trash2, UploadCloud, Users, X, Zap } from 'lucide-react';
 import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
@@ -154,9 +155,33 @@ function parseCsv(text: string): Play[] {
   }).filter(play => play.playNo || play.result);
 }
 
-function AppShell({ children, data }: { children: ReactNode; data: Dataset }) {
+function AppShell({ children, data, setData }: { children: ReactNode; data: Dataset; setData: (data: Dataset) => void }) {
   const [location] = useLocation(); const [mobileOpen, setMobileOpen] = useState(false);
   const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
+
+  const seasons = Array.from(new Set(data.schedule.map(game => game.season)))
+    .sort((a, b) => Number(b) - Number(a));
+
+  const activeSeason = activeGame?.season ?? seasons[0] ?? '';
+
+  const seasonGames = data.schedule
+    .filter(game => game.season === activeSeason)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const selectGame = (gameId: string) => {
+    if (!gameId) return;
+    setData({ ...data, activeGameId: gameId });
+  };
+
+  const selectSeason = (season: string) => {
+    const firstGame =
+      data.schedule.find(game => game.season === season && !game.archived) ??
+      data.schedule.find(game => game.season === season);
+
+    if (firstGame) {
+      setData({ ...data, activeGameId: firstGame.id });
+    }
+  };
   const items: { href: NavKey; label: string; icon: typeof LayoutDashboard }[] = [
     { href: '/', label: 'Overview', icon: LayoutDashboard }, { href: '/upload', label: 'Data room', icon: UploadCloud },
     { href: '/scout', label: 'Scouting', icon: Film }, { href: '/live', label: 'Live game', icon: Target }, { href: '/reports', label: 'Reports', icon: ClipboardList }, { href: '/schedule', label: 'Schedule', icon: FileSpreadsheet },
@@ -170,7 +195,49 @@ function AppShell({ children, data }: { children: ReactNode; data: Dataset }) {
       <div className="season-card"><div className="eyebrow">Current board</div><strong>{activeGame ? `${activeGame.season} · ${activeGame.opponent}` : 'No active game'}</strong><p>{activeGame ? `${activeGame.location} · ${activeGame.result}` : 'Choose a game from Schedule.'}</p><div className="season-line" /></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="topbar-title"><button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu /></button><span>Coach Hudl workspace</span></div><div className="topbar-actions"><div className="live-pill"><span className="live-dot" /> workspace synced</div><div className="avatar" aria-label="Coach profile">JR</div></div></header>
+      <header className="topbar">
+        <div className="topbar-title">
+          <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu /></button>
+          <span>Coach Hudl workspace</span>
+        </div>
+
+        <div className="topbar-actions" style={{ gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label htmlFor="global-season" className="eyebrow" style={{ margin: 0 }}>Season</label>
+            <select
+              id="global-season"
+              value={activeSeason}
+              onChange={event => selectSeason(event.target.value)}
+              style={{ minWidth: 90 }}
+              data-testid="select-global-season"
+            >
+              {seasons.map(season => (
+                <option key={season} value={season}>{season}</option>
+              ))}
+            </select>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <label htmlFor="global-game" className="eyebrow" style={{ margin: 0 }}>Game</label>
+            <select
+              id="global-game"
+              value={activeGame?.id ?? ''}
+              onChange={event => selectGame(event.target.value)}
+              style={{ minWidth: 190 }}
+              data-testid="select-global-game"
+            >
+              {seasonGames.map(game => (
+                <option key={game.id} value={game.id}>
+                  {game.opponent}{game.archived ? ' · Archived' : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="live-pill"><span className="live-dot" /> workspace synced</div>
+          <div className="avatar" aria-label="Coach profile">JR</div>
+        </div>
+      </header>
       <main>{children}</main>
     </div>
   </div>;
@@ -352,8 +419,106 @@ function NotFoundPage() { return <div className="content"><PageHead eyebrow="404
 
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
-  const setData = (next: Dataset) => { setDataState(next); saveDataset(next); };
-  return <AppShell data={data}><Switch><Route path="/"><Dashboard data={data} /></Route><Route path="/upload"><UploadPage data={data} setData={setData} /></Route><Route path="/scout"><ScoutPage data={data} /></Route><Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route><Route path="/reports"><ReportsHubPage data={data} /></Route><Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route><Route><NotFoundPage /></Route></Switch></AppShell>;
+  const [loadingFromSupabase, setLoadingFromSupabase] = useState(true);
+
+  const setData = (next: Dataset) => {
+    setDataState(next);
+    saveDataset(next);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSupabaseData() {
+      try {
+        const seasons = await getSeasons();
+
+        if (!seasons.length) {
+          return;
+        }
+
+        const currentSeason =
+          seasons.find(season => season.is_current) ?? seasons[0];
+
+        const games = await getGames(undefined, true);
+
+        if (cancelled) return;
+
+        const seasonYears = new Map(
+          seasons.map(season => [season.id, String(season.season_year)])
+        );
+
+        const schedule: ScheduleGame[] = games.map(game => ({
+          id: game.id,
+          season: seasonYears.get(game.season_id) ?? 'Unknown',
+          opponent: game.opponent,
+          date: game.game_date ?? '',
+          location: game.location ?? '—',
+          result: game.game_result ?? '—',
+          archived: game.archived,
+        }));
+
+        const activeGameId =
+          schedule.find(game => !game.archived)?.id ??
+          schedule[0]?.id ??
+          '';
+
+        setDataState(current => ({
+          ...current,
+          schedule,
+          activeGameId,
+        }));
+
+        saveDataset({
+          ...safeLoad(),
+          schedule,
+          activeGameId,
+        });
+      } catch (error) {
+        console.error('Could not load football data from Supabase:', error);
+      } finally {
+        if (!cancelled) {
+          setLoadingFromSupabase(false);
+        }
+      }
+    }
+
+    loadSupabaseData();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (loadingFromSupabase) {
+    return (
+      <div style={{
+        minHeight: '100vh',
+        display: 'grid',
+        placeItems: 'center',
+        padding: 24,
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <RefreshCw size={24} />
+          <p>Loading football data…</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <AppShell data={data} setData={setData}>
+      <Switch>
+        <Route path="/"><Dashboard data={data} /></Route>
+        <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
+        <Route path="/scout"><ScoutPage data={data} /></Route>
+        <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
+        <Route path="/reports"><ReportsHubPage data={data} /></Route>
+        <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
+        <Route><NotFoundPage /></Route>
+      </Switch>
+    </AppShell>
+  );
 }
 function App() { return <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}><Router /></WouterRouter>; }
 

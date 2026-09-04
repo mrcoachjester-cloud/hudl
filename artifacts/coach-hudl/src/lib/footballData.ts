@@ -101,15 +101,21 @@ export async function getSeasons(): Promise<Season[]> {
 /**
  * Get games for a season.
  */
-export async function getGames(seasonId?: string): Promise<Game[]> {
+export async function getGames(
+  seasonId?: string,
+  includeArchived = true
+): Promise<Game[]> {
   let query = supabase
     .from('games')
     .select('*')
-    .eq('archived', false)
     .order('game_date', { ascending: false });
 
   if (seasonId) {
     query = query.eq('season_id', seasonId);
+  }
+
+  if (!includeArchived) {
+    query = query.eq('archived', false);
   }
 
   const { data, error } = await query;
@@ -117,6 +123,53 @@ export async function getGames(seasonId?: string): Promise<Game[]> {
   if (error) throw error;
 
   return data ?? [];
+}
+
+/**
+ * Create a scheduled game.
+ */
+export async function createGame(input: {
+  seasonId: string;
+  opponent: string;
+  gameDate?: string;
+  location?: string;
+  result?: string;
+}): Promise<Game> {
+  const { data, error } = await supabase
+    .from('games')
+    .insert({
+      season_id: input.seasonId,
+      opponent: input.opponent,
+      game_date: input.gameDate || null,
+      location: input.location || null,
+      game_result: input.result && input.result !== '—' ? input.result : null,
+      archived: false,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+
+  return data;
+}
+
+/**
+ * Archive or restore a scheduled game.
+ */
+export async function setGameArchived(
+  gameId: string,
+  archived: boolean
+): Promise<Game> {
+  const { data, error } = await supabase
+    .from('games')
+    .update({ archived })
+    .eq('id', gameId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+
+  return data;
 }
 
 /**
