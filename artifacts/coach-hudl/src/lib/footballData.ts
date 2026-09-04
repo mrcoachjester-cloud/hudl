@@ -190,6 +190,105 @@ export async function getGame(gameId: string): Promise<Game | null> {
 /**
  * Get live plays for a game.
  */
+
+export type LivePlayInput = {
+  gameId: string;
+  playNumber: number;
+  odk?: string | null;
+  down?: number | null;
+  dist?: number | null;
+  hash?: string | null;
+  gnls?: number | null;
+  yardLine?: number | null;
+  playType?: string | null;
+  result?: string | null;
+  offFormation?: string | null;
+  personnel?: string | null;
+  scheme?: string | null;
+  motion?: string | null;
+  offPlay?: string | null;
+  ballCarrier?: string | null;
+  defense?: string | null;
+  playDir?: string | null;
+  backfield?: string | null;
+};
+
+export async function createLivePlay(input: LivePlayInput): Promise<LivePlay> {
+  const { data, error } = await supabase
+    .from('plays')
+    .insert({
+      game_id: input.gameId,
+      play_number: input.playNumber,
+      odk: input.odk ?? null,
+      down: input.down ?? null,
+      dist: input.dist ?? null,
+      hash: input.hash ?? null,
+      gnls: input.gnls ?? null,
+      yard_line: input.yardLine ?? null,
+      play_type: input.playType ?? null,
+      result: input.result ?? null,
+      off_formation: input.offFormation ?? null,
+      personnel: input.personnel ?? null,
+      scheme: input.scheme ?? null,
+      motion: input.motion ?? null,
+      off_play: input.offPlay ?? null,
+      ball_carrier: input.ballCarrier ?? null,
+      defense: input.defense ?? null,
+      play_dir: input.playDir ?? null,
+      backfield: input.backfield ?? null,
+    })
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function updateLivePlay(
+  playId: string,
+  input: Partial<LivePlayInput>
+): Promise<LivePlay> {
+  const updates: Record<string, unknown> = {};
+
+  if (input.playNumber !== undefined) updates.play_number = input.playNumber;
+  if (input.odk !== undefined) updates.odk = input.odk;
+  if (input.down !== undefined) updates.down = input.down;
+  if (input.dist !== undefined) updates.dist = input.dist;
+  if (input.hash !== undefined) updates.hash = input.hash;
+  if (input.gnls !== undefined) updates.gnls = input.gnls;
+  if (input.yardLine !== undefined) updates.yard_line = input.yardLine;
+  if (input.playType !== undefined) updates.play_type = input.playType;
+  if (input.result !== undefined) updates.result = input.result;
+  if (input.offFormation !== undefined) updates.off_formation = input.offFormation;
+  if (input.personnel !== undefined) updates.personnel = input.personnel;
+  if (input.scheme !== undefined) updates.scheme = input.scheme;
+  if (input.motion !== undefined) updates.motion = input.motion;
+  if (input.offPlay !== undefined) updates.off_play = input.offPlay;
+  if (input.ballCarrier !== undefined) updates.ball_carrier = input.ballCarrier;
+  if (input.defense !== undefined) updates.defense = input.defense;
+  if (input.playDir !== undefined) updates.play_dir = input.playDir;
+  if (input.backfield !== undefined) updates.backfield = input.backfield;
+
+  const { data, error } = await supabase
+    .from('plays')
+    .update(updates)
+    .eq('id', playId)
+    .select('*')
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteLivePlay(playId: string): Promise<void> {
+  const { error } = await supabase
+    .from('plays')
+    .delete()
+    .eq('id', playId);
+
+  if (error) throw error;
+}
+
 export async function getLivePlays(gameId: string): Promise<LivePlay[]> {
   const { data, error } = await supabase
     .from('plays')
