@@ -84,10 +84,78 @@ export type ScoutingPlay = {
   created_at: string;
 };
 
+export type StandardPlay = {
+  playNo: string;
+  odk: string;
+  dn: string;
+  dist: string;
+  hash: string;
+  gnls: string;
+  carrier: string;
+  yardLn: string;
+  type: string;
+  result: string;
+  form: string;
+  personnel: string;
+  scheme: string;
+  defense: string;
+  motion: string;
+  offPlay: string;
+  dir: string;
+  backfield: string;
+};
+
+export function livePlayToStandard(play: LivePlay): StandardPlay {
+  return {
+    playNo: String(play.play_number ?? '1').padStart(2, '0'),
+    odk: play.odk ?? 'O',
+    dn: play.down !== null ? String(play.down) : '1',
+    dist: play.dist !== null ? String(play.dist) : '10',
+    hash: play.hash ?? 'M',
+    gnls: play.gnls !== null ? String(play.gnls) : '0',
+    carrier: play.ball_carrier ?? '—',
+    yardLn: play.yard_line !== null ? String(play.yard_line) : '—',
+    type: play.play_type ?? 'Run',
+    result: play.result ?? '—',
+    form: play.off_formation ?? '—',
+    personnel: play.personnel ?? '—',
+    scheme: play.scheme ?? '—',
+    defense: play.defense ?? '—',
+    motion: play.motion ?? 'None',
+    offPlay: play.off_play ?? '—',
+    dir: play.play_dir ?? '—',
+    backfield: play.backfield ?? '—',
+  };
+}
+
+export function scoutingPlayToStandard(play: ScoutingPlay): StandardPlay {
+  return {
+    playNo: String(play.play_no ?? '1').padStart(2, '0'),
+    odk: play.odk ?? 'O',
+    dn: play.dn !== null ? String(play.dn) : '1',
+    dist: play.dist !== null ? String(play.dist) : '10',
+    hash: play.hash ?? 'M',
+    gnls: play.gnls !== null ? String(play.gnls) : '0',
+    carrier: play.ball_carrier ?? '—',
+    yardLn: play.yard_ln !== null ? String(play.yard_ln) : '—',
+    type: play.play_type ?? 'Run',
+    result: play.result ?? '—',
+    form: play.off_form ?? '—',
+    personnel: play.personnel ?? '—',
+    scheme: play.scheme ?? '—',
+    defense: play.defense ?? '—',
+    motion: play.motion ?? 'None',
+    offPlay: play.off_play ?? '—',
+    dir: play.direction ?? '—',
+    backfield: play.backfield ?? '—',
+  };
+}
+
 /**
  * Get all seasons.
  */
 export async function getSeasons(): Promise<Season[]> {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from('seasons')
     .select('*')
@@ -105,6 +173,7 @@ export async function getGames(
   seasonId?: string,
   includeArchived = true
 ): Promise<Game[]> {
+  if (!supabase) return [];
   let query = supabase
     .from('games')
     .select('*')
@@ -134,7 +203,8 @@ export async function createGame(input: {
   gameDate?: string;
   location?: string;
   result?: string;
-}): Promise<Game> {
+}): Promise<Game | null> {
+  if (!supabase) return null;
   const { data, error } = await supabase
     .from('games')
     .insert({
@@ -159,7 +229,8 @@ export async function createGame(input: {
 export async function setGameArchived(
   gameId: string,
   archived: boolean
-): Promise<Game> {
+): Promise<Game | null> {
+  if (!supabase) return null;
   const { data, error } = await supabase
     .from('games')
     .update({ archived })
@@ -176,6 +247,7 @@ export async function setGameArchived(
  * Get one game.
  */
 export async function getGame(gameId: string): Promise<Game | null> {
+  if (!supabase) return null;
   const { data, error } = await supabase
     .from('games')
     .select('*')
@@ -191,6 +263,7 @@ export async function getGame(gameId: string): Promise<Game | null> {
  * Get live plays for a game.
  */
 export async function getLivePlays(gameId: string): Promise<LivePlay[]> {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from('plays')
     .select('*')
@@ -208,6 +281,7 @@ export async function getLivePlays(gameId: string): Promise<LivePlay[]> {
 export async function getScoutingSessions(
   seasonId: string
 ): Promise<ScoutingSession[]> {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from('scouting_sessions')
     .select('*')
@@ -226,6 +300,7 @@ export async function getScoutingSessions(
 export async function getScoutingPlays(
   sessionId: string
 ): Promise<ScoutingPlay[]> {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from('scouting_plays')
     .select('*')

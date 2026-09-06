@@ -1,34 +1,63 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { getGames, getSeasons } from './lib/footballData';
-import { Check, ChevronRight, CircleAlert, ClipboardList, Download, FileSpreadsheet, Film, LayoutDashboard, Menu, Plus, RefreshCw, Search, Shield, Sparkles, Target, Trash2, UploadCloud, Users, X, Zap } from 'lucide-react';
+import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { isSupabaseConfigured } from './lib/supabase';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  Check,
+  ChevronRight,
+  CircleAlert,
+  ClipboardList,
+  Compass,
+  Download,
+  FileSpreadsheet,
+  Film,
+  Gauge,
+  Layers,
+  LayoutDashboard,
+  Menu,
+  Percent,
+  Plus,
+  RefreshCw,
+  Search,
+  Shield,
+  Sparkles,
+  Split,
+  Target,
+  Trash2,
+  TrendingUp,
+  UploadCloud,
+  Users,
+  X,
+  Zap,
+} from 'lucide-react';
 import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
 
-type Play = {
-  playNo: string;
-  odk: string;
-  dn: string;
-  dist: string;
-  hash: string;
-  gnls: string;
-  carrier: string;
-  yardLn: string;
-  type: string;
+type Play = StandardPlay;
+
+type ScheduleGame = {
+  id: string;
+  season: string;
+  opponent: string;
+  date: string;
+  location: string;
   result: string;
-  form: string;
-  personnel: string;
-  scheme: string;
-  defense: string;
-  motion: string;
-  offPlay: string;
-  dir: string;
-  backfield: string;
+  archived: boolean;
 };
 
-type ScheduleGame = { id: string; season: string; opponent: string; date: string; location: string; result: string; archived: boolean };
-type Dataset = { scouting: Play[]; live: Play[]; schedule: ScheduleGame[]; activeGameId: string };
+type Dataset = {
+  scouting: Play[];
+  live: Play[];
+  schedule: ScheduleGame[];
+  activeGameId: string;
+  gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
+};
+
 type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule';
 
-const STORAGE_KEY = 'coach-hudl-datasets-v1';
+const STORAGE_KEY = 'coach-hudl-datasets-v2';
 const demoSchedule: ScheduleGame[] = [
   { id: 'game-2024-north-ridge', season: '2024', opponent: 'North Ridge', date: '2024-10-18', location: 'Home', result: '—', archived: false },
   { id: 'game-2023-river-city', season: '2023', opponent: 'River City', date: '2023-10-20', location: 'Away', result: 'W 28-14', archived: true },
@@ -50,18 +79,52 @@ const demoScouting: Play[] = [
   { playNo:'14', odk:'O', dn:'3', dist:'2', hash:'L', gnls:'2', carrier:'J. Hayes', yardLn:'OPP 49', type:'Pass', result:'Incomplete', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'None', offPlay:'Boot', dir:'Right', backfield:'Under Center' },
   { playNo:'15', odk:'O', dn:'1', dist:'10', hash:'R', gnls:'32', carrier:'M. Carter', yardLn:'OPP 44', type:'Run', result:'Counter +22', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'Orbit', offPlay:'GT Counter', dir:'Right', backfield:'Under Center' },
 ];
-const emptyDataset: Dataset = { scouting: demoScouting, live: [], schedule: demoSchedule, activeGameId: demoSchedule[0].id };
+const emptyDataset: Dataset = {
+  scouting: demoScouting,
+  live: [],
+  schedule: demoSchedule,
+  activeGameId: demoSchedule[0].id,
+  gameData: { [demoSchedule[0].id]: { scouting: demoScouting, live: [] } },
+};
 
 function safeLoad(): Dataset {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
     if (!raw) return emptyDataset;
     const parsed = JSON.parse(raw) as Partial<Dataset>;
     const schedule = Array.isArray(parsed.schedule) && parsed.schedule.length ? parsed.schedule : demoSchedule;
-    return { scouting: Array.isArray(parsed.scouting) ? parsed.scouting : demoScouting, live: Array.isArray(parsed.live) ? parsed.live : [], schedule, activeGameId: typeof parsed.activeGameId === 'string' && schedule.some(game => game.id === parsed.activeGameId) ? parsed.activeGameId : schedule[0].id };
-  } catch { return emptyDataset; }
+    const activeGameId = typeof parsed.activeGameId === 'string' && schedule.some(game => game.id === parsed.activeGameId) ? parsed.activeGameId : schedule[0].id;
+    const gameData: Record<string, { scouting: Play[]; live: Play[] }> =
+      parsed.gameData && typeof parsed.gameData === 'object'
+        ? parsed.gameData
+        : { [demoSchedule[0].id]: { scouting: Array.isArray(parsed.scouting) && parsed.scouting.length ? parsed.scouting : demoScouting, live: Array.isArray(parsed.live) ? parsed.live : [] } };
+
+    const currentPlays = gameData[activeGameId] ?? {
+      scouting: Array.isArray(parsed.scouting) && parsed.scouting.length ? parsed.scouting : (activeGameId === demoSchedule[0].id ? demoScouting : []),
+      live: Array.isArray(parsed.live) ? parsed.live : [],
+    };
+
+    return {
+      scouting: currentPlays.scouting,
+      live: currentPlays.live,
+      schedule,
+      activeGameId,
+      gameData: {
+        ...gameData,
+        [activeGameId]: currentPlays,
+      },
+    };
+  } catch {
+    return emptyDataset;
+  }
 }
-function saveDataset(data: Dataset) { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+function saveDataset(data: Dataset) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (err) {
+    console.warn('Could not persist dataset to localStorage:', err);
+  }
+}
 function num(value: string) { const found = value.match(/-?\d+/); return found ? Number(found[0]) : 0; }
 function normalizeOdk(value: string): string {
   const normalized = value.trim().toLowerCase();
@@ -156,7 +219,8 @@ function parseCsv(text: string): Play[] {
 }
 
 function AppShell({ children, data, setData }: { children: ReactNode; data: Dataset; setData: (data: Dataset) => void }) {
-  const [location] = useLocation(); const [mobileOpen, setMobileOpen] = useState(false);
+  const [location] = useLocation();
+  const [mobileOpen, setMobileOpen] = useState(false);
   const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
 
   const seasons = Array.from(new Set(data.schedule.map(game => game.season)))
@@ -169,8 +233,25 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     .sort((a, b) => a.date.localeCompare(b.date));
 
   const selectGame = (gameId: string) => {
-    if (!gameId) return;
-    setData({ ...data, activeGameId: gameId });
+    if (!gameId || gameId === data.activeGameId) return;
+    const gameData = {
+      ...(data.gameData || {}),
+      [data.activeGameId]: { scouting: data.scouting, live: data.live },
+    };
+    const targetPlays = gameData[gameId] ?? {
+      scouting: gameId === demoSchedule[0].id ? demoScouting : [],
+      live: [],
+    };
+    setData({
+      ...data,
+      activeGameId: gameId,
+      scouting: targetPlays.scouting,
+      live: targetPlays.live,
+      gameData: {
+        ...gameData,
+        [gameId]: targetPlays,
+      },
+    });
   };
 
   const selectSeason = (season: string) => {
@@ -179,92 +260,651 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       data.schedule.find(game => game.season === season);
 
     if (firstGame) {
-      setData({ ...data, activeGameId: firstGame.id });
+      selectGame(firstGame.id);
     }
   };
+
   const items: { href: NavKey; label: string; icon: typeof LayoutDashboard }[] = [
-    { href: '/', label: 'Overview', icon: LayoutDashboard }, { href: '/upload', label: 'Data room', icon: UploadCloud },
-    { href: '/scout', label: 'Scouting', icon: Film }, { href: '/live', label: 'Live game', icon: Target }, { href: '/reports', label: 'Reports', icon: ClipboardList }, { href: '/schedule', label: 'Schedule', icon: FileSpreadsheet },
+    { href: '/', label: 'Overview', icon: LayoutDashboard },
+    { href: '/upload', label: 'Data room', icon: UploadCloud },
+    { href: '/scout', label: 'Scouting', icon: Film },
+    { href: '/live', label: 'Live game', icon: Target },
+    { href: '/reports', label: 'Reports', icon: ClipboardList },
+    { href: '/schedule', label: 'Schedule', icon: FileSpreadsheet },
   ];
-  return <div className="app-shell">
-    <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
-      <div className="brand"><div className="brand-mark">H</div><div className="brand-name">coach<span>hudl</span></div></div>
-      <div className="nav-label eyebrow">Workspace</div>
-      <nav className="nav-list" aria-label="Primary navigation">{items.map(item => { const Icon = item.icon; return <Link key={item.href} href={item.href} onClick={() => setMobileOpen(false)} className={`nav-item ${location === item.href ? 'active' : ''}`} data-testid={`link-nav-${item.label.toLowerCase().replace(' ', '-')}`}><Icon /><span>{item.label}</span>{location === item.href && <ChevronRight className="ml-auto" />}</Link>; })}</nav>
-      <div className="sidebar-spacer" />
-      <div className="season-card"><div className="eyebrow">Current board</div><strong>{activeGame ? `${activeGame.season} · ${activeGame.opponent}` : 'No active game'}</strong><p>{activeGame ? `${activeGame.location} · ${activeGame.result}` : 'Choose a game from Schedule.'}</p><div className="season-line" /></div>
-    </aside>
-    <div className="main-shell">
-      <header className="topbar">
-        <div className="topbar-title">
-          <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation"><Menu /></button>
-          <span>Coach Hudl workspace</span>
-        </div>
 
-        <div className="topbar-actions" style={{ gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label htmlFor="global-season" className="eyebrow" style={{ margin: 0 }}>Season</label>
-            <select
-              id="global-season"
-              value={activeSeason}
-              onChange={event => selectSeason(event.target.value)}
-              style={{ minWidth: 90 }}
-              data-testid="select-global-season"
-            >
-              {seasons.map(season => (
-                <option key={season} value={season}>{season}</option>
-              ))}
-            </select>
+  const totalPlays = data.scouting.length + data.live.length;
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
+        <div className="brand">
+          <div className="brand-mark">H</div>
+          <div className="brand-name">
+            coach<span>hudl</span>
+          </div>
+        </div>
+        <div className="nav-label eyebrow">Workspace</div>
+        <nav className="nav-list" aria-label="Primary navigation">
+          {items.map(item => {
+            const Icon = item.icon;
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setMobileOpen(false)}
+                className={`nav-item ${location === item.href ? 'active' : ''}`}
+                data-testid={`link-nav-${item.label.toLowerCase().replace(' ', '-')}`}
+              >
+                <Icon />
+                <span>{item.label}</span>
+                {location === item.href && <ChevronRight className="ml-auto" />}
+              </Link>
+            );
+          })}
+        </nav>
+        <div className="sidebar-spacer" />
+        <div className="season-card">
+          <div className="eyebrow">Active matchup</div>
+          <strong>{activeGame ? `${activeGame.season} · ${activeGame.opponent}` : 'No active game'}</strong>
+          <p>{activeGame ? `${activeGame.location} · ${totalPlays} plays charted` : 'Choose a game from Schedule.'}</p>
+          <div className="season-line" />
+        </div>
+      </aside>
+      <div className="main-shell">
+        <header className="topbar">
+          <div className="topbar-title">
+            <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation">
+              <Menu />
+            </button>
+            <span>Coach Hudl workspace</span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <label htmlFor="global-game" className="eyebrow" style={{ margin: 0 }}>Game</label>
-            <select
-              id="global-game"
-              value={activeGame?.id ?? ''}
-              onChange={event => selectGame(event.target.value)}
-              style={{ minWidth: 190 }}
-              data-testid="select-global-game"
-            >
-              {seasonGames.map(game => (
-                <option key={game.id} value={game.id}>
-                  {game.opponent}{game.archived ? ' · Archived' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          <div className="topbar-actions" style={{ gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label htmlFor="global-season" className="eyebrow" style={{ margin: 0 }}>
+                Season
+              </label>
+              <select
+                id="global-season"
+                value={activeSeason}
+                onChange={event => selectSeason(event.target.value)}
+                style={{ minWidth: 90 }}
+                data-testid="select-global-season"
+              >
+                {seasons.map(season => (
+                  <option key={season} value={season}>
+                    {season}
+                  </option>
+                ))}
+              </select>
+            </div>
 
-          <div className="live-pill"><span className="live-dot" /> workspace synced</div>
-          <div className="avatar" aria-label="Coach profile">JR</div>
-        </div>
-      </header>
-      <main>{children}</main>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label htmlFor="global-game" className="eyebrow" style={{ margin: 0 }}>
+                Game
+              </label>
+              <select
+                id="global-game"
+                value={activeGame?.id ?? ''}
+                onChange={event => selectGame(event.target.value)}
+                style={{ minWidth: 190 }}
+                data-testid="select-global-game"
+              >
+                {seasonGames.map(game => (
+                  <option key={game.id} value={game.id}>
+                    {game.opponent}
+                    {game.archived ? ' · Archived' : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="live-pill">
+              <span className="live-dot" /> {isSupabaseConfigured ? 'cloud connected' : 'local workspace'}
+            </div>
+            <div className="avatar" aria-label="Coach profile">
+              JR
+            </div>
+          </div>
+        </header>
+        <main>{children}</main>
+      </div>
     </div>
-  </div>;
+  );
 }
 
 function PageHead({ eyebrow, title, description, actions }: { eyebrow: string; title: string; description: string; actions?: ReactNode }) {
-  return <div className="page-head fade-in"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{actions && <div className="actions">{actions}</div>}</div>;
-}
-function Panel({ children, className = '', pad = true, style }: { children: ReactNode; className?: string; pad?: boolean; style?: CSSProperties }) { return <section className={`panel ${pad ? 'panel-pad' : ''} ${className}`} style={style}>{children}</section>; }
-function SectionTitle({ title, detail, link }: { title: string; detail?: string; link?: ReactNode }) { return <div className="section-title"><div><h2>{title}</h2>{detail && <p>{detail}</p>}</div>{link}</div>; }
-function Toast({ message, onClose }: { message: string; onClose: () => void }) { useEffect(() => { const timer = window.setTimeout(onClose, 2800); return () => window.clearTimeout(timer); }, [onClose]); return <div className="toast" role="status" data-testid="status-toast"><Check /><span>{message}</span><button onClick={onClose} aria-label="Dismiss notification" data-testid="button-dismiss-toast"><X /></button></div>; }
-function useToast() { const [message, setMessage] = useState(''); return { message, notify: setMessage, clear: () => setMessage('') }; }
-
-function Kpi({ label, value, note, green = false }: { label: string; value: string; note: string; green?: boolean }) { return <div className={`panel kpi ${green ? 'green' : ''}`} data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`}><div className="kpi-label">{label}</div><div className="kpi-value">{value}</div><div className="kpi-note">{note}</div></div>; }
-function Dashboard({ data }: { data: Dataset }) {
-  const plays = data.scouting; const runs = plays.filter(play => play.type.toLowerCase().includes('run')); const passes = plays.filter(play => play.type.toLowerCase().includes('pass')); const explosives = plays.filter(isExplosive);
-  const runPercent = plays.length ? Math.round(runs.length / plays.length * 100) : 0; const passPercent = 100 - runPercent;
-  const downGroups = ['1', '2', '3', '4'].map(down => plays.filter(play => play.dn === down).length);
-  return <div className="content"><PageHead eyebrow="Opponent intelligence · week 08" title="Your film room, sharper." description="North Ridge defense is queued up. Here's what the tape is saying before kickoff." actions={<><Link href="/upload" className="btn btn-ghost" data-testid="link-dashboard-upload"><UploadCloud /> Load data</Link><Link href="/scout" className="btn btn-primary" data-testid="link-dashboard-scout">Open scouting <ChevronRight /></Link></>} />
-    <div className="grid kpi-grid"><Kpi label="Plays charted" value={String(plays.length).padStart(2, '0')} note="Scouting dataset" /><Kpi label="Yards / play" value={average(plays)} note="+0.8 vs last scout" green /><Kpi label="Explosive plays" value={String(explosives.length).padStart(2, '0')} note={`${plays.length ? Math.round(explosives.length / plays.length * 100) : 0}% of all snaps`} /><Kpi label="Run tendency" value={`${runPercent}%`} note={`${passes.length} pass / ${runs.length} run`} green /></div>
-    <div className="grid dashboard-grid">
-      <Panel><SectionTitle title="Down & distance profile" detail="Snap count by situation" link={<Link href="/scout" className="tiny-link" data-testid="link-dashboard-down-profile">Full breakdown</Link>} /><div className="bar-chart">{downGroups.map((count, i) => <div className="bar-col" key={i}><span className="bar-value">{count}</span><div className="bar" style={{ height: `${Math.max(8, (count / Math.max(...downGroups, 1)) * 150)}px` }} /><span className="bar-label">{i + 1}{i === 0 ? 'st' : i === 1 ? 'nd' : i === 2 ? 'rd' : 'th'}</span></div>)}</div></Panel>
-      <Panel><SectionTitle title="Call mix" detail="Run / pass identity at a glance" /><div className="donut-wrap"><div className="donut"><div className="donut-center"><strong>{plays.length}</strong><span>snaps</span></div></div><div className="legend"><div className="legend-row"><span className="legend-dot" style={{ background: 'hsl(var(--primary))' }} />Pass <b>{passPercent}%</b></div><div className="legend-row"><span className="legend-dot" style={{ background: 'hsl(var(--accent))' }} />Run <b>{runPercent}%</b></div></div></div></Panel>
-      <Panel><SectionTitle title="Tendency alerts" detail="What to carry into the meeting" /><div className="feed"><div className="feed-row"><span className="feed-num">01</span><div className="feed-main"><strong>Counter shows up on early downs</strong><span>{plays.filter(p => p.offPlay.toLowerCase().includes('counter')).length} calls · {Math.round(plays.filter(p => p.offPlay.toLowerCase().includes('counter')).length / plays.length * 100)}% tendency</span></div><span className="tag green">watch</span></div><div className="feed-row"><span className="feed-num">02</span><div className="feed-main"><strong>Motion shows up in the pass game</strong><span>{plays.filter(p => p.motion.toLowerCase() !== 'none').length} motion-tagged snaps · mostly Gun</span></div><span className="tag">key</span></div><div className="feed-row"><span className="feed-num">03</span><div className="feed-main"><span>{plays.filter(p => p.dn === '3' && num(p.dist) >= 6 && false).length} pressures in chart</span></div><span className="tag gold">alert</span></div></div></Panel>
-      <Panel><SectionTitle title="Recent charted plays" detail="Latest additions to scouting board" link={<Link href="/upload" className="tiny-link" data-testid="link-dashboard-recent">Data room</Link>} /><div className="feed">{plays.slice(-4).reverse().map(play => <div className="feed-row" key={play.playNo}><span className="feed-num">#{play.playNo}</span><div className="feed-main"><strong>{play.type} · {play.offPlay}</strong><span>{play.dn}&amp;{play.dist} · {play.form} · {play.result}</span></div><span className={`tag ${isExplosive(play) ? 'green' : ''}`}>{isExplosive(play) ? 'explosive' : play.type.toLowerCase()}</span></div>)}</div></Panel>
+  return (
+    <div className="page-head fade-in">
+      <div>
+        <div className="eyebrow">{eyebrow}</div>
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      {actions && <div className="actions">{actions}</div>}
     </div>
-  </div>;
+  );
+}
+
+function Panel({ children, className = '', pad = true, style }: { children: ReactNode; className?: string; pad?: boolean; style?: CSSProperties }) {
+  return (
+    <section className={`panel ${pad ? 'panel-pad' : ''} ${className}`} style={style}>
+      {children}
+    </section>
+  );
+}
+
+function SectionTitle({ title, detail, link }: { title: string; detail?: string; link?: ReactNode }) {
+  return (
+    <div className="section-title">
+      <div>
+        <h2>{title}</h2>
+        {detail && <p>{detail}</p>}
+      </div>
+      {link}
+    </div>
+  );
+}
+
+function Toast({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const timer = window.setTimeout(onClose, 2800);
+    return () => window.clearTimeout(timer);
+  }, [onClose]);
+  return (
+    <div className="toast" role="status" data-testid="status-toast">
+      <Check />
+      <span>{message}</span>
+      <button onClick={onClose} aria-label="Dismiss notification" data-testid="button-dismiss-toast">
+        <X />
+      </button>
+    </div>
+  );
+}
+
+function useToast() {
+  const [message, setMessage] = useState('');
+  return { message, notify: setMessage, clear: () => setMessage('') };
+}
+
+function Kpi({ label, value, note, green = false }: { label: string; value: string; note: string; green?: boolean }) {
+  return (
+    <div className={`panel kpi ${green ? 'green' : ''}`} data-testid={`metric-${label.toLowerCase().replaceAll(' ', '-')}`}>
+      <div className="kpi-label">{label}</div>
+      <div className="kpi-value">{value}</div>
+      <div className="kpi-note">{note}</div>
+    </div>
+  );
+}
+
+function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset) => void }) {
+  const [phaseFilter, setPhaseFilter] = useState<'all' | 'O' | 'D' | 'K'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'scouting' | 'live'>('all');
+
+  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
+  const scoutingPlays = data.scouting;
+  const livePlays = data.live;
+
+  const basePlays = useMemo(() => {
+    if (sourceFilter === 'scouting') return scoutingPlays;
+    if (sourceFilter === 'live') return livePlays;
+    return [...scoutingPlays, ...livePlays];
+  }, [sourceFilter, scoutingPlays, livePlays]);
+
+  const plays = useMemo(() => {
+    if (phaseFilter === 'all') return basePlays;
+    return basePlays.filter(play => normalizeOdk(play.odk) === phaseFilter);
+  }, [basePlays, phaseFilter]);
+
+  // Core Football Efficiency Calculations
+  const runs = plays.filter(play => play.type.toLowerCase().includes('run'));
+  const passes = plays.filter(play => play.type.toLowerCase().includes('pass'));
+  const explosives = plays.filter(isExplosive);
+
+  const runPercent = plays.length ? Math.round((runs.length / plays.length) * 100) : 0;
+  const passPercent = plays.length ? 100 - runPercent : 0;
+
+  const runYards = runs.reduce((sum, play) => sum + num(play.gnls), 0);
+  const passYards = passes.reduce((sum, play) => sum + num(play.gnls), 0);
+  const runAvg = runs.length ? (runYards / runs.length).toFixed(1) : '0.0';
+  const passAvg = passes.length ? (passYards / passes.length).toFixed(1) : '0.0';
+
+  // Standard Football Success Rate (1st: 40% dist, 2nd: 60% dist, 3rd/4th: 100% dist)
+  const successCount = plays.filter(play => {
+    const down = num(play.dn);
+    const dist = Math.max(num(play.dist), 1);
+    const gain = num(play.gnls);
+    if (down === 1) return gain >= dist * 0.4 || gain >= 4;
+    if (down === 2) return gain >= dist * 0.6 || gain >= 4;
+    if (down === 3 || down === 4) return gain >= dist;
+    return gain >= 4;
+  }).length;
+  const successRate = plays.length ? Math.round((successCount / plays.length) * 100) : 0;
+
+  // 3rd Down Conversions
+  const thirdDownPlays = plays.filter(play => play.dn === '3');
+  const thirdDownConverted = thirdDownPlays.filter(play => num(play.gnls) >= num(play.dist) && num(play.dist) > 0).length;
+  const thirdDownPct = thirdDownPlays.length ? Math.round((thirdDownConverted / thirdDownPlays.length) * 100) : 0;
+
+  // Down Profiles
+  const downGroups = ['1', '2', '3', '4'].map(down => {
+    const dPlays = plays.filter(play => play.dn === down);
+    const dRuns = dPlays.filter(play => play.type.toLowerCase().includes('run'));
+    const dPasses = dPlays.filter(play => play.type.toLowerCase().includes('pass'));
+    const dRunPct = dPlays.length ? Math.round((dRuns.length / dPlays.length) * 100) : 0;
+    return {
+      down,
+      total: dPlays.length,
+      runs: dRuns.length,
+      passes: dPasses.length,
+      runPct: dRunPct,
+      passPct: 100 - dRunPct,
+      avg: average(dPlays),
+    };
+  });
+  const maxDownCount = Math.max(...downGroups.map(d => d.total), 1);
+
+  // Formations Breakdown
+  const uniqueFormations = Array.from(new Set(plays.map(p => p.form).filter(f => f && f !== '—')));
+  const formationStats = uniqueFormations.map(form => {
+    const fPlays = plays.filter(p => p.form === form);
+    const fRuns = fPlays.filter(p => p.type.toLowerCase().includes('run'));
+    const fPasses = fPlays.filter(p => p.type.toLowerCase().includes('pass'));
+    const fRunPct = fPlays.length ? Math.round((fRuns.length / fPlays.length) * 100) : 0;
+    const playCalls = Array.from(new Set(fPlays.map(p => p.offPlay).filter(c => c && c !== '—'))).map(call => ({
+      call,
+      count: fPlays.filter(p => p.offPlay === call).length,
+    })).sort((a, b) => b.count - a.count);
+    return {
+      form,
+      total: fPlays.length,
+      runPct: fRunPct,
+      passPct: 100 - fRunPct,
+      avg: average(fPlays),
+      topCall: playCalls[0] ? `${playCalls[0].call} (${Math.round((playCalls[0].count / fPlays.length) * 100)}%)` : '—',
+    };
+  }).sort((a, b) => b.total - a.total).slice(0, 4);
+
+  // Dynamic Tendency Tells Generator
+  const alerts: { num: string; title: string; detail: string; tag: string; tagColor?: string }[] = [];
+  const firstDown = downGroups[0];
+  if (firstDown.total >= 3) {
+    if (firstDown.runPct >= 65) {
+      alerts.push({
+        num: String(alerts.length + 1).padStart(2, '0'),
+        title: 'Heavy run bias on 1st down',
+        detail: `${firstDown.runPct}% run rate on 1st down (${firstDown.runs} runs, avg ${firstDown.avg} yds). Expect inside/outside zone on 1st & 10.`,
+        tag: 'tendency',
+        tagColor: 'green',
+      });
+    } else if (firstDown.passPct >= 65) {
+      alerts.push({
+        num: String(alerts.length + 1).padStart(2, '0'),
+        title: 'Early-down passing aggression',
+        detail: `${firstDown.passPct}% pass rate on 1st down (${firstDown.passes} throws). Watch for quick game and play-action shots.`,
+        tag: 'alert',
+        tagColor: 'gold',
+      });
+    }
+  }
+
+  formationStats.forEach(f => {
+    if (f.total >= 3) {
+      if (f.runPct >= 75) {
+        alerts.push({
+          num: String(alerts.length + 1).padStart(2, '0'),
+          title: `${f.form} is a dedicated run look`,
+          detail: `${f.runPct}% run tendency (${f.total} snaps). Primary call: ${f.topCall}.`,
+          tag: 'tell',
+          tagColor: 'green',
+        });
+      } else if (f.passPct >= 75) {
+        alerts.push({
+          num: String(alerts.length + 1).padStart(2, '0'),
+          title: `${f.form} triggers the pass game`,
+          detail: `${f.passPct}% pass tendency (${f.total} snaps). Primary call: ${f.topCall}.`,
+          tag: 'key',
+          tagColor: 'gold',
+        });
+      }
+    }
+  });
+
+  const motionPlays = plays.filter(p => p.motion && p.motion.toLowerCase() !== 'none' && p.motion !== '—');
+  if (motionPlays.length >= 2) {
+    const motionPasses = motionPlays.filter(p => p.type.toLowerCase().includes('pass')).length;
+    const motionPassPct = Math.round((motionPasses / motionPlays.length) * 100);
+    alerts.push({
+      num: String(alerts.length + 1).padStart(2, '0'),
+      title: `Motion tell: ${motionPassPct}% pass tendency`,
+      detail: `${motionPlays.length} motion-tagged snaps. Formation adjustment creates coverage voids.`,
+      tag: 'tell',
+      tagColor: '',
+    });
+  }
+
+  const thirdAndLong = plays.filter(p => p.dn === '3' && num(p.dist) >= 7);
+  if (thirdAndLong.length >= 2) {
+    const tPasses = thirdAndLong.filter(p => p.type.toLowerCase().includes('pass')).length;
+    alerts.push({
+      num: String(alerts.length + 1).padStart(2, '0'),
+      title: '3rd & Long pass lock',
+      detail: `${Math.round((tPasses / thirdAndLong.length) * 100)}% pass rate on 3rd & 7+ (${tPasses} of ${thirdAndLong.length} snaps). Prime pressure window.`,
+      tag: 'money down',
+      tagColor: 'gold',
+    });
+  }
+
+  if (alerts.length === 0 && plays.length > 0) {
+    alerts.push({
+      num: '01',
+      title: 'Charted profile ready',
+      detail: `${plays.length} snaps ready for analysis across ${formationStats.length || 1} formation packages.`,
+      tag: 'ready',
+      tagColor: 'green',
+    });
+  }
+
+  // Live vs Scouting Comparison Shift
+  const hasLive = livePlays.length > 0;
+  const scoutRunPct = scoutingPlays.length ? Math.round((scoutingPlays.filter(p => p.type.toLowerCase().includes('run')).length / scoutingPlays.length) * 100) : 0;
+  const liveRunPct = livePlays.length ? Math.round((livePlays.filter(p => p.type.toLowerCase().includes('run')).length / livePlays.length) * 100) : 0;
+  const runShift = liveRunPct - scoutRunPct;
+
+  const loadDemoScout = () => {
+    if (setData) {
+      setData({ ...data, scouting: demoScouting });
+    }
+  };
+
+  return (
+    <div className="content">
+      <PageHead
+        eyebrow={`Opponent intelligence · ${activeGame ? `${activeGame.season} · ${activeGame.location === 'Home' ? 'vs' : '@'} ${activeGame.opponent}` : 'Active Game'}`}
+        title="Your film room, sharper."
+        description={`${activeGame ? activeGame.opponent : 'Opponent'} is queued up with ${plays.length} charted snaps in active view (${scoutingPlays.length} scout, ${livePlays.length} live).`}
+        actions={
+          <>
+            <Link href="/upload" className="btn btn-ghost" data-testid="link-dashboard-upload">
+              <UploadCloud /> Data room
+            </Link>
+            <Link href="/scout" className="btn btn-ghost" data-testid="link-dashboard-scout">
+              <Film /> Scouting tape
+            </Link>
+            <Link href="/live" className="btn btn-primary" data-testid="link-dashboard-live">
+              <Target /> Sideline chart <ChevronRight />
+            </Link>
+          </>
+        }
+      />
+
+      {/* Filter Tabs */}
+      <div className="filters" style={{ marginBottom: 18, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div className="actions" style={{ gap: 6 }}>
+          <button
+            className={`btn ${phaseFilter === 'all' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ padding: '6px 12px', fontSize: 11 }}
+            onClick={() => setPhaseFilter('all')}
+            data-testid="filter-phase-all"
+          >
+            All phases
+          </button>
+          <button
+            className={`btn ${phaseFilter === 'O' ? 'btn-green' : 'btn-ghost'}`}
+            style={{ padding: '6px 12px', fontSize: 11 }}
+            onClick={() => setPhaseFilter('O')}
+            data-testid="filter-phase-offense"
+          >
+            <Zap size={13} /> Offense (O)
+          </button>
+          <button
+            className={`btn ${phaseFilter === 'D' ? 'btn-primary' : 'btn-ghost'}`}
+            style={{ padding: '6px 12px', fontSize: 11 }}
+            onClick={() => setPhaseFilter('D')}
+            data-testid="filter-phase-defense"
+          >
+            <Shield size={13} /> Defense (D)
+          </button>
+        </div>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span className="eyebrow" style={{ margin: 0 }}>
+            Source:
+          </span>
+          <select
+            value={sourceFilter}
+            onChange={e => setSourceFilter(e.target.value as 'all' | 'scouting' | 'live')}
+            style={{ padding: '4px 8px', fontSize: 11, borderRadius: 6 }}
+            data-testid="select-source-filter"
+          >
+            <option value="all">Combined ({scoutingPlays.length + livePlays.length})</option>
+            <option value="scouting">Scouting only ({scoutingPlays.length})</option>
+            <option value="live">Live game only ({livePlays.length})</option>
+          </select>
+        </div>
+      </div>
+
+      {/* KPI Suite */}
+      <div className="grid kpi-grid" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+        <Kpi label="Plays charted" value={String(plays.length).padStart(2, '0')} note={`${runs.length} Run / ${passes.length} Pass`} />
+        <Kpi label="Yards / play" value={average(plays)} note={`Run ${runAvg} / Pass ${passAvg}`} green />
+        <Kpi label="Success rate" value={`${successRate}%`} note={`${successCount} situational wins`} green={successRate >= 50} />
+        <Kpi label="Explosive plays" value={String(explosives.length).padStart(2, '0')} note={`${plays.length ? Math.round((explosives.length / plays.length) * 100) : 0}% of charted snaps`} />
+      </div>
+
+      {/* Live Shift Alert Banner */}
+      {hasLive && (
+        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(31, 201, 139, 0.06)', borderColor: 'rgba(31, 201, 139, 0.28)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(31, 201, 139, 0.18)', color: '#62dfae' }}>
+                <Activity size={18} />
+              </div>
+              <div>
+                <strong style={{ fontSize: 14, color: '#fff' }}>Game-Day Shift Detected</strong>
+                <p style={{ margin: '2px 0 0', fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>
+                  Live game is trending {runShift > 5 ? `+${runShift}% more run-heavy` : runShift < -5 ? `+${Math.abs(runShift)}% more pass-heavy` : 'consistent with'} the scouting report ({liveRunPct}% Run live vs {scoutRunPct}% Run scout).
+                </p>
+              </div>
+            </div>
+            <Link href="/live" className="btn btn-green" style={{ padding: '6px 12px', fontSize: 11 }} data-testid="link-banner-live">
+              View live sideline
+            </Link>
+          </div>
+        </Panel>
+      )}
+
+      {/* Main Analysis Grid */}
+      <div className="grid dashboard-grid">
+        {/* Down & Distance Profile */}
+        <Panel>
+          <SectionTitle
+            title="Down & distance profile"
+            detail="Snap count & Run/Pass distribution by down"
+            link={
+              <Link href="/scout" className="tiny-link" data-testid="link-dashboard-down-profile">
+                Full breakdown
+              </Link>
+            }
+          />
+          <div className="bar-chart" style={{ height: 180 }}>
+            {downGroups.map(d => (
+              <div className="bar-col" key={d.down}>
+                <span className="bar-value">
+                  {d.total} <small style={{ opacity: 0.7 }}>({d.runPct}% R)</small>
+                </span>
+                <div className="bar" style={{ height: `${Math.max(10, (d.total / maxDownCount) * 120)}px` }} />
+                <span className="bar-label">
+                  {d.down}
+                  {d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid hsl(var(--border))', display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+            <div>
+              <span className="eyebrow">3rd down conversion:</span> <strong>{thirdDownPct}%</strong> ({thirdDownConverted}/{thirdDownPlays.length})
+            </div>
+            <div>
+              <span className="eyebrow">Early down run rate:</span> <strong>{firstDown.runPct}%</strong>
+            </div>
+          </div>
+        </Panel>
+
+        {/* Call Mix & Identity */}
+        <Panel>
+          <SectionTitle title="Play call mix" detail="Run / pass identity at a glance" />
+          <div className="donut-wrap">
+            <div
+              className="donut"
+              style={{
+                background: `conic-gradient(hsl(var(--accent)) 0 ${runPercent}%, hsl(var(--primary)) ${runPercent}% 100%)`,
+              }}
+            >
+              <div className="donut-center">
+                <strong>{plays.length}</strong>
+                <span>snaps</span>
+              </div>
+            </div>
+            <div className="legend">
+              <div className="legend-row">
+                <span className="legend-dot" style={{ background: 'hsl(var(--accent))' }} />
+                Run <b>{runPercent}%</b> ({runs.length})
+              </div>
+              <div className="legend-row">
+                <span className="legend-dot" style={{ background: 'hsl(var(--primary))' }} />
+                Pass <b>{passPercent}%</b> ({passes.length})
+              </div>
+              <div className="legend-row" style={{ marginTop: 8, fontSize: 11, color: 'hsl(var(--muted-foreground))' }}>
+                Explosives: <b style={{ color: '#fff', marginLeft: 4 }}>{explosives.length}</b>
+              </div>
+            </div>
+          </div>
+        </Panel>
+
+        {/* Dynamic Tendency Tells Feed */}
+        <Panel>
+          <SectionTitle title="Tendency alerts & tells" detail="Automated tactical cues for staff meetings" />
+          <div className="feed">
+            {alerts.map(item => (
+              <div className="feed-row" key={item.num}>
+                <span className="feed-num">{item.num}</span>
+                <div className="feed-main">
+                  <strong>{item.title}</strong>
+                  <span>{item.detail}</span>
+                </div>
+                <span className={`tag ${item.tagColor === 'green' ? 'green' : item.tagColor === 'gold' ? 'gold' : ''}`}>
+                  {item.tag}
+                </span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        {/* Top Formations Matrix */}
+        <Panel>
+          <SectionTitle title="Formation tendencies" detail="Package distribution & favorite call" />
+          {formationStats.length ? (
+            <div className="feed">
+              {formationStats.map(f => (
+                <div className="feed-row" key={f.form}>
+                  <div className="feed-main">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <strong>{f.form}</strong>
+                      <span className="eyebrow" style={{ color: '#62dfae' }}>{f.runPct}% Run / {f.passPct}% Pass</span>
+                    </div>
+                    <span>Primary call: <b>{f.topCall}</b> · Avg gain: <b>{f.avg} yds</b></span>
+                    <div className="progress" style={{ marginTop: 6, height: 4 }}>
+                      <span style={{ width: `${f.runPct}%`, background: 'hsl(var(--accent))' }} />
+                    </div>
+                  </div>
+                  <span className="tag" style={{ marginLeft: 8 }}>{f.total} snaps</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="empty" style={{ padding: 20 }}>
+              <Layers size={24} />
+              <p style={{ margin: 0 }}>No formation data in current filter.</p>
+            </div>
+          )}
+        </Panel>
+
+        {/* Recent Charted Plays */}
+        <Panel style={{ gridColumn: '1 / -1' }} pad={false}>
+          <div style={{ padding: '21px 21px 0' }}>
+            <SectionTitle
+              title="Recent charted plays"
+              detail={`Latest snaps from ${sourceFilter === 'all' ? 'active board' : sourceFilter}`}
+              link={
+                <Link href="/scout" className="tiny-link" data-testid="link-dashboard-recent">
+                  Full tape ledger
+                </Link>
+              }
+            />
+          </div>
+          {plays.length ? (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Play #</th>
+                    <th>Phase</th>
+                    <th>Situation</th>
+                    <th>Type / Call</th>
+                    <th>Formation</th>
+                    <th>Ball carrier</th>
+                    <th>Gain / loss</th>
+                    <th>Result</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {plays.slice(-5).reverse().map((play, i) => (
+                    <tr key={`${play.playNo}-${i}`} data-testid={`row-overview-play-${i}`}>
+                      <td>
+                        <strong>#{play.playNo}</strong>
+                      </td>
+                      <td>
+                        <span className={`tag ${normalizeOdk(play.odk) === 'O' ? 'green' : normalizeOdk(play.odk) === 'D' ? '' : 'gold'}`}>
+                          {play.odk}
+                        </span>
+                      </td>
+                      <td>
+                        {play.dn}&amp;{play.dist} · {play.hash}
+                      </td>
+                      <td>
+                        <span className={`tag ${play.type.toLowerCase().includes('run') ? 'green' : ''}`}>
+                          {play.type}
+                        </span>{' '}
+                        <span style={{ marginLeft: 6 }}>{play.offPlay}</span>
+                      </td>
+                      <td>{play.form}</td>
+                      <td>{play.carrier}</td>
+                      <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>
+                        {num(play.gnls) > 0 ? `+${play.gnls}` : play.gnls}
+                      </td>
+                      <td>{play.result}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="empty">
+              <Film size={28} />
+              <h3>No charted plays for this game</h3>
+              <p>Import a CSV, chart live sideline snaps, or load demo scouting tape.</p>
+              <button className="btn btn-primary" onClick={loadDemoScout} data-testid="button-overview-load-demo">
+                <Sparkles /> Load demo scouting data
+              </button>
+            </div>
+          )}
+        </Panel>
+      </div>
+    </div>
+  );
 }
 
 function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
@@ -419,21 +1059,32 @@ function NotFoundPage() { return <div className="content"><PageHead eyebrow="404
 
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
-  const [loadingFromSupabase, setLoadingFromSupabase] = useState(true);
+  const [loadingFromSupabase, setLoadingFromSupabase] = useState(isSupabaseConfigured);
 
   const setData = (next: Dataset) => {
-    setDataState(next);
-    saveDataset(next);
+    const gameData = {
+      ...(next.gameData || {}),
+      [next.activeGameId]: { scouting: next.scouting, live: next.live },
+    };
+    const synced: Dataset = { ...next, gameData };
+    setDataState(synced);
+    saveDataset(synced);
   };
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadSupabaseData() {
+      if (!isSupabaseConfigured) {
+        setLoadingFromSupabase(false);
+        return;
+      }
+
       try {
         const seasons = await getSeasons();
 
         if (!seasons.length) {
+          setLoadingFromSupabase(false);
           return;
         }
 
@@ -463,16 +1114,38 @@ function Router() {
           schedule[0]?.id ??
           '';
 
-        setDataState(current => ({
-          ...current,
-          schedule,
-          activeGameId,
-        }));
+        let livePlays: Play[] = [];
+        let scoutingPlays: Play[] = [];
 
-        saveDataset({
-          ...safeLoad(),
-          schedule,
-          activeGameId,
+        try {
+          if (activeGameId) {
+            const remoteLive = await getLivePlays(activeGameId);
+            if (remoteLive.length > 0) {
+              livePlays = remoteLive.map(livePlayToStandard);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch remote live plays:', e);
+        }
+
+        setDataState(current => {
+          const gameData = {
+            ...(current.gameData || {}),
+            [activeGameId]: {
+              scouting: current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting),
+              live: livePlays.length ? livePlays : current.live,
+            },
+          };
+          const nextDataset: Dataset = {
+            ...current,
+            schedule,
+            activeGameId,
+            scouting: gameData[activeGameId].scouting,
+            live: gameData[activeGameId].live,
+            gameData,
+          };
+          saveDataset(nextDataset);
+          return nextDataset;
         });
       } catch (error) {
         console.error('Could not load football data from Supabase:', error);
@@ -492,15 +1165,17 @@ function Router() {
 
   if (loadingFromSupabase) {
     return (
-      <div style={{
-        minHeight: '100vh',
-        display: 'grid',
-        placeItems: 'center',
-        padding: 24,
-      }}>
+      <div
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          padding: 24,
+        }}
+      >
         <div style={{ textAlign: 'center' }}>
-          <RefreshCw size={24} />
-          <p>Loading football data…</p>
+          <RefreshCw size={24} className="animate-spin" />
+          <p style={{ marginTop: 12, color: 'hsl(var(--muted-foreground))' }}>Connecting football database…</p>
         </div>
       </div>
     );
@@ -509,7 +1184,7 @@ function Router() {
   return (
     <AppShell data={data} setData={setData}>
       <Switch>
-        <Route path="/"><Dashboard data={data} /></Route>
+        <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
         <Route path="/scout"><ScoutPage data={data} /></Route>
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
