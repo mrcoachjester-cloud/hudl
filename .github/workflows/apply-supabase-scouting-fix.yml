@@ -1,0 +1,110 @@
+name: apply-supabase-scouting-fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: "!contains(github.event.head_commit.message, 'Apply Supabase scouting data fix')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch football dashboard data loading
+        env:
+          FILE: artifacts/coach-hudl/src/App.tsx
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path(os.environ['FILE'])
+          text = path.read_text()
+
+          old_active = """        const activeGameId =
+            schedule.find(game => !game.archived)?.id ??
+            schedule[0]?.id ??
+            '';"""
+          new_active = """        const currentSeasonYear = String(currentSeason.season_year);
+          const activeGameId =
+            schedule.find(game => game.season === currentSeasonYear && !game.archived)?.id ??
+            schedule.find(game => game.season === currentSeasonYear)?.id ??
+            schedule.find(game => !game.archived)?.id ??
+            schedule[0]?.id ??
+            '';"""
+          if old_active not in text:
+              raise SystemExit('active game block not found')
+          text = text.replace(old_active, new_active, 1)
+
+          old_remote = """        let livePlays: Play[] = [];
+          let scoutingPlays: Play[] = [];
+
+          try {
+            if (activeGameId) {
+              const remoteLive = await getLivePlays(activeGameId);
+              if (remoteLive.length > 0) {
+                livePlays = remoteLive.map(livePlayToStandard);
+              }
+            }
+          } catch (e) {
+            console.warn('Could not fetch remote live plays:', e);
+          }"""
+          new_remote = """        let livePlays: Play[] = [];
+          let scoutingPlays: Play[] = [];
+
+          try {
+            if (currentSeason?.id) {
+              const sessions = await getScoutingSessions(currentSeason.id);
+              const scoutingBySession = await Promise.all(
+                sessions.map(async session => {
+                  try {
+                    const plays = await getScoutingPlays(session.id);
+                    return plays.map(scoutingPlayToStandard);
+                  } catch (e) {
+                    console.warn(`Could not fetch scouting plays for session ${session.id}:`, e);
+                    return [];
+                  }
+                })
+              );
+              scoutingPlays = scoutingBySession.flat();
+            }
+          } catch (e) {
+            console.warn('Could not fetch remote scouting data:', e);
+          }
+
+          try {
+            if (activeGameId) {
+              const remoteLive = await getLivePlays(activeGameId);
+              if (remoteLive.length > 0) {
+                livePlays = remoteLive.map(livePlayToStandard);
+              }
+            }
+          } catch (e) {
+            console.warn('Could not fetch remote live plays:', e);
+          }"""
+          if old_remote not in text:
+              raise SystemExit('remote data block not found')
+          text = text.replace(old_remote, new_remote, 1)
+
+          old_state = """              scouting: current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting),
+              live: livePlays.length ? livePlays : current.live,"""
+          new_state = """              scouting: scoutingPlays,
+              live: livePlays,"""
+          if old_state not in text:
+              raise SystemExit('state merge block not found')
+          text = text.replace(old_state, new_state, 1)
+
+          path.write_text(text)
+          PY
+
+      - name: Commit and push fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/coach-hudl/src/App.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Apply Supabase scouting data fix"
+          git push
