@@ -51,6 +51,10 @@ const newSelectTeam = `  const selectTeam = async (team: string) => {
   };`;
 if (source.includes(oldSelectTeam)) source = source.replace(oldSelectTeam, newSelectTeam);
 
+// The top bar is intentionally Season + Team only. Game is no longer a global selector.
+const gameSelector = /\n\s*<div style=\{\{ display: 'flex', alignItems: 'center', gap: 8 \}\}>\n\s*<label htmlFor="global-game"[\s\S]*?<\/div>\n\s*\n\s*<div className="live-pill">/;
+if (gameSelector.test(source)) source = source.replace(gameSelector, '\n\n            <div className="live-pill">');
+
 const start = source.indexOf('function UploadPage(');
 const end = source.indexOf('\nfunction ScoutPage(', start);
 if (start === -1 || end === -1) throw new Error('Could not locate UploadPage boundaries');
