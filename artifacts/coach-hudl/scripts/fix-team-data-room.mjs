@@ -133,7 +133,7 @@ const replacement = String.raw`function UploadPage({ data, setData }: { data: Da
         await appendScoutingPlays(targetScoutId, parsed);
         const scouting = await getScoutingPlaysForTeam(seasonYear, team);
         setData({ ...data, activeTeam: team, scouting });
-        toast.notify(`${parsed.length} plays saved under ${team} · ${scouts.find(s => s.id === targetScoutId)?.description ?? newScoutName}`);
+        toast.notify(parsed.length + ' plays saved under ' + team + ' · ' + (scouts.find(s => s.id === targetScoutId)?.description ?? newScoutName));
         if (targetScoutId !== scoutId) setScoutId(targetScoutId);
         const sessions = await getScoutingSessions(season.id);
         setScouts(sessions.filter(session => session.opponent.trim().toLowerCase() === team.trim().toLowerCase()).map(session => ({ id: session.id, description: session.description, created_at: session.created_at })));
@@ -160,7 +160,7 @@ const replacement = String.raw`function UploadPage({ data, setData }: { data: Da
         {scoutId === 'new' && <div><label className="eyebrow">Scout File Name</label><input className="input" value={newScoutName} onChange={event => setNewScoutName(event.target.value)} placeholder="Scout File 1" /></div>}
         <button className="btn btn-primary" disabled={!team || loading} onClick={() => fileRef.current?.click()} data-testid="button-data-room-upload"><UploadCloud /> {loading ? 'Saving…' : 'Upload Data'}</button>
       </div>
-      <div className="callout" style={{ marginTop: 16 }}><Shield /><span><strong>{team || 'No team selected'}</strong>{selectedScout ? ` · ${selectedScout.description || 'Scout File'}` : team ? ' · New Scout File' : ''} — scouting data is stored independently from Live Game charting.</span></div>
+      <div className="callout" style={{ marginTop: 16 }}><Shield /><span><strong>{team || 'No team selected'}</strong>{selectedScout ? ' · ' + (selectedScout.description || 'Scout File') : team ? ' · New Scout File' : ''} — scouting data is stored independently from Live Game charting.</span></div>
     </Panel>
     <Panel pad={false}>
       <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Normalized preview" detail={preview.length ? `Showing ${preview.length} imported rows` : 'Your uploaded rows will appear here'} /></div>
