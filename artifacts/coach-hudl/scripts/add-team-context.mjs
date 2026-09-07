@@ -11,11 +11,11 @@ function replaceOnce(from, to, label) {
   source = source.replace(from, to);
 }
 
-replaceOnce(
-  "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';",
-  "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';\nimport { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';",
-  'team data import'
-);
+if (!source.includes("from './lib/teamData';")) {
+  const importMatch = source.match(/import \{[^\n]+\} from '\.\/lib\/footballData';/);
+  if (!importMatch) throw new Error('Team context patch could not find footballData import');
+  source = source.replace(importMatch[0], `${importMatch[0]}\nimport { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';`);
+}
 
 replaceOnce(
   "  activeGameId: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }>;",
@@ -42,21 +42,10 @@ replaceOnce(
 );
 
 replaceOnce(
-  "    setData({\n      ...data,\n      activeGameId: gameId,\n      scouting: targetPlays.scouting,\n      live: targetPlays.live,",
-  "    setData({\n      ...data,\n      activeGameId: gameId,\n      activeTeam: data.activeTeam ?? activeGame?.opponent ?? '',\n      scouting: data.scouting,\n      live: targetPlays.live,",
-  'game selection preserving scout team'
-);
-
-replaceOnce(
   "            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>\n              <label htmlFor=\"global-game\" className=\"eyebrow\" style={{ margin: 0 }}>",
   "            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>\n              <label htmlFor=\"global-team\" className=\"eyebrow\" style={{ margin: 0 }}>\n                Team\n              </label>\n              <select\n                id=\"global-team\"\n                value={activeTeam}\n                onChange={event => void selectTeam(event.target.value)}\n                style={{ minWidth: 150 }}\n                data-testid=\"select-global-team\"\n              >\n                {!teamOptions.includes(activeTeam) && activeTeam && <option value={activeTeam}>{activeTeam}</option>}\n                {teamOptions.map(team => (\n                  <option key={team} value={team}>{team}</option>\n                ))}\n              </select>\n            </div>\n\n            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>\n              <label htmlFor=\"global-game\" className=\"eyebrow\" style={{ margin: 0 }}>",
   'top Team selector'
 );
 
-replaceOnce(
-  "              <select\n                id=\"global-game\"\n                value={activeGame?.id ?? ''}\n                onChange={event => selectGame(event.target.value)}",
-  "              <select\n                id=\"global-game\"\n                value={activeGame?.id ?? ''}\n                onChange={event => selectGame(event.target.value)}",
-  'game selector'
-);
-
 fs.writeFileSync(path, source);
+console.log('Season → Team → Game context patch applied.');
