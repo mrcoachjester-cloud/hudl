@@ -9,36 +9,196 @@ permissions:
 
 jobs:
   fix:
-    if: "!contains(github.event.head_commit.message, 'Apply Supabase scouting data fix')"
+    if: "!contains(github.event.head_commit.message, 'Apply Data Room scouting/live separation')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch football dashboard data loading
+      - name: Patch Data Room and Supabase context separation
         env:
           FILE: artifacts/coach-hudl/src/App.tsx
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          import os
+          import os, re
 
           path = Path(os.environ['FILE'])
           text = path.read_text()
 
-          old_active = """        const activeGameId =
-            schedule.find(game => !game.archived)?.id ??
-            schedule[0]?.id ??
-            '';"""
-          new_active = """        const currentSeasonYear = String(currentSeason.season_year);
-          const activeGameId =
-            schedule.find(game => game.season === currentSeasonYear && !game.archived)?.id ??
-            schedule.find(game => game.season === currentSeasonYear)?.id ??
-            schedule.find(game => !game.archived)?.id ??
-            schedule[0]?.id ??
-            '';"""
-          if old_active not in text:
-              raise SystemExit('active game block not found')
-          text = text.replace(old_active, new_active, 1)
+          # 1) Add a first-class scout-file model. Scout files are intentionally
+          # independent from scheduled/live games.
+          old_types = """type Dataset = {
+            scouting: Play[];
+            live: Play[];
+            schedule: ScheduleGame[];
+            activeGameId: string;
+            gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
+          };"""
+          new_types = """type ScoutFile = {
+            id: string;
+            label: string;
+            opponent: string;
+            week: string;
+            description: string;
+            plays: Play[];
+          };
 
+          type Dataset = {
+            scouting: Play[];
+            live: Play[];
+            schedule: ScheduleGame[];
+            activeGameId: string;
+            scoutFiles: ScoutFile[];
+            activeScoutFileId: string;
+            gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
+          };"""
+          if old_types in text:
+              text = text.replace(old_types, new_types, 1)
+
+          old_empty = """const emptyDataset: Dataset = {
+            scouting: demoScouting,
+            live: [],
+            schedule: demoSchedule,
+            activeGameId: demoSchedule[0].id,
+            gameData: { [demoSchedule[0].id]: { scouting: demoScouting, live: [] } },
+          };"""
+          new_empty = """const emptyScoutFile: ScoutFile = {
+            id: 'scout-demo',
+            label: 'Demo scout file',
+            opponent: 'North Ridge',
+            week: '',
+            description: 'Bundled demo scouting data',
+            plays: demoScouting,
+          };
+          const emptyDataset: Dataset = {
+            scouting: demoScouting,
+            live: [],
+            schedule: demoSchedule,
+            activeGameId: demoSchedule[0].id,
+            scoutFiles: [emptyScoutFile],
+            activeScoutFileId: emptyScoutFile.id,
+            gameData: { [demoSchedule[0].id]: { scouting: [], live: [] } },
+          };"""
+          if old_empty in text:
+              text = text.replace(old_empty, new_empty, 1)
+
+          # 2) Make local storage migration preserve scout files separately from games.
+          marker = """    const schedule = Array.isArray(parsed.schedule) && parsed.schedule.length ? parsed.schedule : demoSchedule;
+            const activeGameId = typeof parsed.activeGameId === 'string' && schedule.some(game => game.id === parsed.activeGameId) ? parsed.activeGameId : schedule[0].id;"""
+          replacement = """    const schedule = Array.isArray(parsed.schedule) && parsed.schedule.length ? parsed.schedule : demoSchedule;
+            const scoutFiles: ScoutFile[] = Array.isArray(parsed.scoutFiles) && parsed.scoutFiles.length
+              ? parsed.scoutFiles
+              : [{
+                  id: 'scout-imported',
+                  label: 'Imported scout file',
+                  opponent: schedule[0]?.opponent ?? 'Opponent',
+                  week: '',
+                  description: 'Migrated from the previous scouting board',
+                  plays: Array.isArray(parsed.scouting) ? parsed.scouting : [],
+                }];
+            const activeScoutFileId = typeof parsed.activeScoutFileId === 'string' && scoutFiles.some(file => file.id === parsed.activeScoutFileId)
+              ? parsed.activeScoutFileId
+              : scoutFiles[0].id;
+            const activeScoutFile = scoutFiles.find(file => file.id === activeScoutFileId) ?? scoutFiles[0];
+            const activeGameId = typeof parsed.activeGameId === 'string' && schedule.some(game => game.id === parsed.activeGameId) ? parsed.activeGameId : schedule[0].id;"""
+          if marker in text:
+              text = text.replace(marker, replacement, 1)
+
+          old_current = """    const currentPlays = gameData[activeGameId] ?? {
+              scouting: Array.isArray(parsed.scouting) && parsed.scouting.length ? parsed.scouting : (activeGameId === demoSchedule[0].id ? demoScouting : []),
+              live: Array.isArray(parsed.live) ? parsed.live : [],
+            };"""
+          new_current = """    const currentPlays = gameData[activeGameId] ?? {
+              scouting: [],
+              live: Array.isArray(parsed.live) ? parsed.live : [],
+            };"""
+          if old_current in text:
+              text = text.replace(old_current, new_current, 1)
+
+          old_return = """      scouting: currentPlays.scouting,
+              live: currentPlays.live,
+              schedule,
+              activeGameId,
+              gameData: {
+                ...gameData,
+                [activeGameId]: currentPlays,
+              },"""
+          new_return = """      scouting: activeScoutFile.plays,
+              live: currentPlays.live,
+              schedule,
+              activeGameId,
+              scoutFiles,
+              activeScoutFileId,
+              gameData: {
+                ...gameData,
+                [activeGameId]: currentPlays,
+              },"""
+          if old_return in text:
+              text = text.replace(old_return, new_return, 1)
+
+          # 3) setData persists scouting changes into the selected scout file,
+          # while live changes remain keyed to the selected scheduled game.
+          old_setdata = """    const gameData = {
+              ...(next.gameData || {}),
+              [next.activeGameId]: { scouting: next.scouting, live: next.live },
+            };
+            const synced: Dataset = { ...next, gameData };"""
+          new_setdata = """    const gameData = {
+              ...(next.gameData || {}),
+              [next.activeGameId]: {
+                scouting: next.gameData?.[next.activeGameId]?.scouting ?? [],
+                live: next.live,
+              },
+            };
+            const scoutFiles = (next.scoutFiles || []).map(file =>
+              file.id === next.activeScoutFileId ? { ...file, plays: next.scouting } : file
+            );
+            const synced: Dataset = { ...next, scoutFiles, gameData };"""
+          if old_setdata in text:
+              text = text.replace(old_setdata, new_setdata, 1)
+
+          # 4) Replace game switching so changing the live game never silently changes
+          # the scout file. Scouting is a separate weekly study context.
+          old_select_game = """    const gameData = {
+              ...(data.gameData || {}),
+              [data.activeGameId]: { scouting: data.scouting, live: data.live },
+            };
+            const targetPlays = gameData[gameId] ?? {
+              scouting: gameId === demoSchedule[0].id ? demoScouting : [],
+              live: [],
+            };
+            setData({
+              ...data,
+              activeGameId: gameId,
+              scouting: targetPlays.scouting,
+              live: targetPlays.live,
+              gameData: {
+                ...gameData,
+                [gameId]: targetPlays,
+              },
+            });"""
+          new_select_game = """    const gameData = {
+              ...(data.gameData || {}),
+              [data.activeGameId]: {
+                scouting: data.gameData?.[data.activeGameId]?.scouting ?? [],
+                live: data.live,
+              },
+            };
+            const targetPlays = gameData[gameId] ?? { scouting: [], live: [] };
+            setData({
+              ...data,
+              activeGameId: gameId,
+              scouting: data.scouting,
+              live: targetPlays.live,
+              gameData: {
+                ...gameData,
+                [gameId]: targetPlays,
+              },
+            });"""
+          if old_select_game in text:
+              text = text.replace(old_select_game, new_select_game, 1)
+
+          # 5) Supabase load: create one scout-file entry per scouting session and
+          # do NOT attach scouting plays to the live scheduled game.
           old_remote = """        let livePlays: Play[] = [];
           let scoutingPlays: Play[] = [];
 
@@ -54,25 +214,26 @@ jobs:
           }"""
           new_remote = """        let livePlays: Play[] = [];
           let scoutingPlays: Play[] = [];
+          let scoutFilesFromSupabase: ScoutFile[] = [];
 
           try {
             if (currentSeason?.id) {
               const sessions = await getScoutingSessions(currentSeason.id);
-              const scoutingBySession = await Promise.all(
-                sessions.map(async session => {
-                  try {
-                    const plays = await getScoutingPlays(session.id);
-                    return plays.map(scoutingPlayToStandard);
-                  } catch (e) {
-                    console.warn(`Could not fetch scouting plays for session ${session.id}:`, e);
-                    return [];
-                  }
-                })
-              );
-              scoutingPlays = scoutingBySession.flat();
+              scoutFilesFromSupabase = await Promise.all(sessions.map(async session => {
+                const plays = await getScoutingPlays(session.id);
+                return {
+                  id: session.id,
+                  label: session.description || (session.week ? `Week ${session.week} · ${session.opponent}` : session.opponent),
+                  opponent: session.opponent,
+                  week: session.week ?? '',
+                  description: session.description ?? '',
+                  plays: plays.map(scoutingPlayToStandard),
+                };
+              }));
+              scoutingPlays = scoutFilesFromSupabase[0]?.plays ?? [];
             }
           } catch (e) {
-            console.warn('Could not fetch remote scouting data:', e);
+            console.warn('Could not fetch remote scouting files:', e);
           }
 
           try {
@@ -85,17 +246,66 @@ jobs:
           } catch (e) {
             console.warn('Could not fetch remote live plays:', e);
           }"""
-          if old_remote not in text:
-              raise SystemExit('remote data block not found')
-          text = text.replace(old_remote, new_remote, 1)
+          if old_remote in text:
+              text = text.replace(old_remote, new_remote, 1)
 
+          # Replace the Supabase state merge so scout files are first-class state.
           old_state = """              scouting: current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting),
               live: livePlays.length ? livePlays : current.live,"""
           new_state = """              scouting: scoutingPlays,
               live: livePlays,"""
-          if old_state not in text:
-              raise SystemExit('state merge block not found')
-          text = text.replace(old_state, new_state, 1)
+          if old_state in text:
+              text = text.replace(old_state, new_state, 1)
+
+          old_next = """            schedule,
+            activeGameId,
+            scouting: gameData[activeGameId].scouting,
+            live: gameData[activeGameId].live,"""
+          new_next = """            schedule,
+            activeGameId,
+            scouting: scoutFilesFromSupabase[0]?.plays ?? current.scouting,
+            live: gameData[activeGameId].live,
+            scoutFiles: scoutFilesFromSupabase.length ? scoutFilesFromSupabase : current.scoutFiles,
+            activeScoutFileId: scoutFilesFromSupabase[0]?.id ?? current.activeScoutFileId,"""
+          if old_next in text:
+              text = text.replace(old_next, new_next, 1)
+
+          # 6) Data Room: show separate Scout File and Live Game selectors and scope
+          # imports/clears to the selected context.
+          old_upload_state = """  const [target, setTarget] = useState<'scouting' | 'live'>('scouting'); const [preview, setPreview] = useState<Play[]>(data.scouting); const [loading, setLoading] = useState(false); const fileRef = useRef<HTMLInputElement>(null); const toast = useToast();"""
+          new_upload_state = """  const [target, setTarget] = useState<'scouting' | 'live'>('scouting');
+  const [preview, setPreview] = useState<Play[]>(data.scouting);
+  const [loading, setLoading] = useState(false);
+  const [newScoutFileName, setNewScoutFileName] = useState('');
+  const fileRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();"""
+          if old_upload_state in text:
+              text = text.replace(old_upload_state, new_upload_state, 1)
+
+          old_handle = """  const handleFile = (file?: File) => { if (!file) return; setLoading(true); const reader = new FileReader(); reader.onload = () => { const parsed = parseCsv(String(reader.result ?? '')); setPreview(parsed.slice(0, 12)); if (parsed.length) { const next = { ...data, [target]: parsed }; setData(next); toast.notify(`${parsed.length} plays normalized into ${target} board`); } else toast.notify('No readable play rows found in that file'); setLoading(false); }; reader.onerror = () => { setLoading(false); toast.notify('Could not read that file'); }; reader.readAsText(file); };"""
+          new_handle = """  const handleFile = (file?: File) => { if (!file) return; setLoading(true); const reader = new FileReader(); reader.onload = () => { const parsed = parseCsv(String(reader.result ?? '')); setPreview(parsed.slice(0, 12)); if (parsed.length) { const next = target === 'scouting' ? { ...data, scouting: parsed, scoutFiles: data.scoutFiles.map(file => file.id === data.activeScoutFileId ? { ...file, plays: parsed } : file) } : { ...data, live: parsed }; setData(next); toast.notify(target === 'scouting' ? `${parsed.length} plays added to ${data.scoutFiles.find(file => file.id === data.activeScoutFileId)?.label ?? 'Scout File'}` : `${parsed.length} plays added to ${data.schedule.find(game => game.id === data.activeGameId)?.opponent ?? 'Live Game'}`); } else toast.notify('No readable play rows found in that file'); setLoading(false); }; reader.onerror = () => { setLoading(false); toast.notify('Could not read that file'); }; reader.readAsText(file); };"""
+          if old_handle in text:
+              text = text.replace(old_handle, new_handle, 1)
+
+          old_clear = """  const clear = (which: 'scouting' | 'live') => { const next = { ...data, [which]: [] }; setData(next); if (target === which) setPreview([]); toast.notify(`${which === 'scouting' ? 'Scouting' : 'Live'} board cleared`); };"""
+          new_clear = """  const clear = (which: 'scouting' | 'live') => { const next = which === 'scouting' ? { ...data, scouting: [], scoutFiles: data.scoutFiles.map(file => file.id === data.activeScoutFileId ? { ...file, plays: [] } : file) } : { ...data, live: [] }; setData(next); if (target === which) setPreview([]); toast.notify(`${which === 'scouting' ? 'Scout file' : 'Live game'} cleared`); };"""
+          if old_clear in text:
+              text = text.replace(old_clear, new_clear, 1)
+
+          old_load_demo = """  const loadDemo = () => { const next = { ...data, scouting: demoScouting }; setData(next); setPreview(demoScouting.slice(0, 12)); toast.notify('Demo scout loaded · 15 plays ready to study'); };"""
+          new_load_demo = """  const loadDemo = () => { const next = { ...data, scouting: demoScouting, scoutFiles: data.scoutFiles.map(file => file.id === data.activeScoutFileId ? { ...file, plays: demoScouting } : file) }; setData(next); setPreview(demoScouting.slice(0, 12)); toast.notify('Demo scout loaded into the selected Scout File · 15 plays ready to study'); };"""
+          if old_load_demo in text:
+              text = text.replace(old_load_demo, new_load_demo, 1)
+
+          # Insert create/select controls after the board toggle row.
+          old_filters = """<div className=\"filters\"><button className={`btn ${target === 'scouting' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setTarget('scouting'); setPreview(data.scouting.slice(0, 12)); }} data-testid=\"button-target-scouting\"><Shield /> Scouting board</button><button className={`btn ${target === 'live' ? 'btn-green' : 'btn-ghost'}`} onClick={() => { setTarget('live'); setPreview(data.live.slice(0, 12)); }} data-testid=\"button-target-live\"><Zap /> Live board</button><span className=\"eyebrow\" style={{ marginLeft: 'auto' }}>{target === 'scouting' ? data.scouting.length : data.live.length} plays saved</span></div>"""
+          new_filters = """<div className=\"filters\" style={{ alignItems: 'center', flexWrap: 'wrap' }}><button className={`btn ${target === 'scouting' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setTarget('scouting'); setPreview(data.scouting.slice(0, 12)); }} data-testid=\"button-target-scouting\"><Shield /> Scout Files</button><button className={`btn ${target === 'live' ? 'btn-green' : 'btn-ghost'}`} onClick={() => { setTarget('live'); setPreview(data.live.slice(0, 12)); }} data-testid=\"button-target-live\"><Zap /> Live Game</button>{target === 'scouting' ? <><label className=\"eyebrow\" htmlFor=\"data-room-scout-file\" style={{ marginLeft: 8 }}>Scout file</label><select id=\"data-room-scout-file\" value={data.activeScoutFileId} onChange={event => { const file = data.scoutFiles.find(item => item.id === event.target.value); if (file) { setData({ ...data, activeScoutFileId: file.id, scouting: file.plays }); setPreview(file.plays.slice(0, 12)); } }} data-testid=\"select-data-room-scout-file\">{data.scoutFiles.map(file => <option key={file.id} value={file.id}>{file.label} · {file.opponent}</option>)}</select><input className=\"input\" style={{ width: 170 }} value={newScoutFileName} onChange={event => setNewScoutFileName(event.target.value)} placeholder=\"New scout file name\" aria-label=\"New scout file name\" data-testid=\"input-new-scout-file\" /><button className=\"btn btn-ghost\" onClick={() => { const label = newScoutFileName.trim(); if (!label) return; const file = { id: `scout-${Date.now()}`, label, opponent: data.schedule.find(game => game.id === data.activeGameId)?.opponent ?? 'Opponent', week: '', description: '', plays: [] }; setData({ ...data, scoutFiles: [...data.scoutFiles, file], activeScoutFileId: file.id, scouting: [] }); setPreview([]); setNewScoutFileName(''); toast.notify(`Scout file created · ${label}`); }} data-testid=\"button-new-scout-file\"><Plus /> New file</button></> : <><label className=\"eyebrow\" htmlFor=\"data-room-live-game\" style={{ marginLeft: 8 }}>Live game</label><select id=\"data-room-live-game\" value={data.activeGameId} onChange={event => { const gameId = event.target.value; const targetPlays = data.gameData?.[gameId] ?? { scouting: [], live: [] }; setData({ ...data, activeGameId: gameId, scouting: data.scouting, live: targetPlays.live, gameData: { ...(data.gameData || {}), [data.activeGameId]: { scouting: [], live: data.live }, [gameId]: targetPlays } }); setPreview(targetPlays.live.slice(0, 12)); }} data-testid=\"select-data-room-live-game\">{data.schedule.filter(game => !game.archived).map(game => <option key={game.id} value={game.id}>{game.location === 'Home' ? 'WHS vs' : '@'} {game.opponent} · {game.date || 'Date TBD'}</option>)}</select></>}</div>"""
+          if old_filters in text:
+              text = text.replace(old_filters, new_filters, 1)
+
+          # Remove wording that implies scout data belongs to the active live game.
+          text = text.replace('Live and scouting boards are ready for the selected game.', 'Live charting is tied to the scheduled game. Scout Files are independent weekly study files.')
+          text = text.replace('Latest snaps from ${sourceFilter === \'all\' ? \'active board\' : sourceFilter}', 'Latest snaps from ${sourceFilter === \'all\' ? \'selected Scout File + Live Game\' : sourceFilter}')
 
           path.write_text(text)
           PY
@@ -106,5 +316,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add artifacts/coach-hudl/src/App.tsx
           git diff --cached --quiet && exit 0
-          git commit -m "Apply Supabase scouting data fix"
+          git commit -m "Apply Data Room scouting/live separation"
           git push
