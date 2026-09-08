@@ -9,6 +9,14 @@ if (!fs.existsSync(appPath)) process.exit(0);
 
 let source = fs.readFileSync(appPath, 'utf8');
 
+// App.tsx uses createGame when adding a new schedule/game entry. Keep that
+// function in the footballData import so recreating a deleted game works.
+const footballDataImport = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
+const footballDataImportWithCreateGame = "import { createGame, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
+if (source.includes(footballDataImport) && !source.includes('import { createGame,')) {
+  source = source.replace(footballDataImport, footballDataImportWithCreateGame);
+}
+
 const importLine = "import LiveReportsPage from './ReportsHubPage';";
 if (!source.includes(importLine)) {
   // App.tsx has been patched by earlier prebuild scripts, so do not depend on
