@@ -2,27 +2,14 @@ import { useMemo, useState } from 'react';
 import { BarChart3, Download, Shield, Zap } from 'lucide-react';
 import type { StandardPlay } from './lib/footballData';
 
-export type ReportsDataset = {
-  scouting: StandardPlay[];
-  live: StandardPlay[];
-};
-
+export type ReportsDataset = { scouting: StandardPlay[]; live: StandardPlay[] };
 type Props = { data: ReportsDataset };
-type StatRow = { name: string; att: number; yds: number; td: number; fum: number };
+type PlayerStat = { name: string; carries: number; rushYds: number; rushTd: number; receptions: number; recYds: number; recTd: number; fumbles: number };
 
-const n = (value: string) => {
-  const match = String(value ?? '').match(/-?\d+(?:\.\d+)?/);
-  return match ? Number(match[0]) : 0;
-};
+const n = (value: string) => { const match = String(value ?? '').match(/-?\d+(?:\.\d+)?/); return match ? Number(match[0]) : 0; };
 const pct = (a: number, b: number) => b ? `${Math.round((a / b) * 100)}%` : '—';
 const avg = (yds: number, att: number) => att ? (yds / att).toFixed(1) : '0.0';
-const odk = (value: string) => {
-  const v = value.trim().toLowerCase();
-  if (v === 'o' || v.includes('off')) return 'O';
-  if (v === 'd' || v.includes('def')) return 'D';
-  if (v === 'k' || v.includes('kick')) return 'K';
-  return value.trim().toUpperCase();
-};
+const odk = (value: string) => { const v = value.trim().toLowerCase(); if (v === 'o' || v.includes('off')) return 'O'; if (v === 'd' || v.includes('def')) return 'D'; if (v === 'k' || v.includes('kick')) return 'K'; return value.trim().toUpperCase(); };
 const isRun = (p: StandardPlay) => p.type.toLowerCase().includes('run');
 const isPass = (p: StandardPlay) => p.type.toLowerCase().includes('pass');
 const gain = (p: StandardPlay) => n(p.gnls);
@@ -34,7 +21,9 @@ const isFumble = (p: StandardPlay) => /fumble/.test(result(p));
 const isInterception = (p: StandardPlay) => /interception|\bint\b/.test(result(p));
 const isSack = (p: StandardPlay) => /sack/.test(result(p));
 const isComplete = (p: StandardPlay) => /complete/.test(result(p)) && !/incomplete/.test(result(p));
-const isNegativePlay = (p: StandardPlay) => isSack(p) || /incomplete|interception/.test(result(p));
+const isIncomplete = (p: StandardPlay) => /incomplete/.test(result(p));
+const isPassingAttempt = (p: StandardPlay) => isPass(p) && (isComplete(p) || isIncomplete(p) || isInterception(p));
+const isNegativePlay = (p: StandardPlay) => isSack(p) || isIncomplete(p) || isInterception(p);
 
 const isFirstDown = (p: StandardPlay) => {
   if (/first\s*down|1st\s*down|fd/.test(result(p))) return true;
@@ -55,48 +44,57 @@ const isRedZone = (p: StandardPlay) => {
 const explosiveRun = (p: StandardPlay) => isRun(p) && gain(p) >= 10;
 const explosivePass = (p: StandardPlay) => isPass(p) && gain(p) >= 15;
 
-function section(title: string, detail?: string) {
-  return <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 15 }}><div><div className="eyebrow">{title}</div>{detail && <div style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))', marginTop: 3 }}>{detail}</div>}</div></div>;
-}
+function section(title: string, detail?: string) { return <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 12, marginBottom: 15 }}><div><div className="eyebrow">{title}</div>{detail && <div style={{ fontSize: 11, color: 'hsl(var(--muted-foreground))', marginTop: 3 }}>{detail}</div>}</div></div>; }
+function Kpi({ label, value, note, green }: { label: string; value: string; note?: string; green?: boolean }) { return <div className="kpi"><span>{label}</span><strong style={green ? { color: '#62dfae' } : undefined}>{value}</strong>{note && <small>{note}</small>}</div>; }
+function tableEmpty(message: string) { return <div className="empty" style={{ padding: 22 }}><BarChart3 size={24} /><p style={{ margin: 0 }}>{message}</p></div>; }
 
-function Kpi({ label, value, note, green }: { label: string; value: string; note?: string; green?: boolean }) {
-  return <div className="kpi"><span>{label}</span><strong style={green ? { color: '#62dfae' } : undefined}>{value}</strong>{note && <small>{note}</small>}</div>;
-}
-
-function tableEmpty(message: string) {
-  return <div className="empty" style={{ padding: 22 }}><BarChart3 size={24} /><p style={{ margin: 0 }}>{message}</p></div>;
-}
-
-function playerStats(plays: StandardPlay[]): StatRow[] {
-  const by = new Map<string, StatRow>();
+function buildPlayerStats(plays: StandardPlay[]): PlayerStat[] {
+  const by = new Map<string, PlayerStat>();
   for (const p of plays) {
     const name = p.carrier.trim();
     if (!name) continue;
-    const row = by.get(name) ?? { name, att: 0, yds: 0, td: 0, fum: 0 };
-    if (isRun(p)) { row.att += 1; row.yds += gain(p); }
-    if (isTD(p)) row.td += 1;
-    if (isFumble(p)) row.fum += 1;
+    const row = by.get(name) ?? { name, carries: 0, rushYds: 0, rushTd: 0, receptions: 0, recYds: 0, recTd: 0, fumbles: 0 };
+    const r = result(p);
+    const scrambleOrSack = /scramble|sack/.test(r);
+    const normalRush = isRun(p) && /rush|rushing|touchdown/.test(r) && !isPass(p);
+    const rush = normalRush || scrambleOrSack;
+    if (rush || isFumble(p) && !isPass(p)) { row.carries += 1; row.rushYds += gain(p); if (isTD(p) && isRun(p)) row.rushTd += 1; }
+    if (isPass(p) && !scrambleOrSack && isComplete(p)) { row.receptions += 1; row.recYds += gain(p); if (isTD(p)) row.recTd += 1; }
+    if (isFumble(p)) row.fumbles += 1;
     by.set(name, row);
   }
-  return [...by.values()].sort((a,b)=>b.yds-a.yds);
+  return [...by.values()].filter(p => p.carries || p.receptions).sort((a, b) => (b.rushYds + b.recYds) - (a.rushYds + a.recYds) || a.name.localeCompare(b.name));
+}
+
+function QBStats({ plays }: { plays: StandardPlay[] }) {
+  const attempts = plays.filter(isPassingAttempt);
+  const completions = attempts.filter(isComplete);
+  const passYds = completions.reduce((s, p) => s + gain(p), 0);
+  const td = completions.filter(isTD).length;
+  const ints = attempts.filter(isInterception).length;
+  const sacks = plays.filter(isSack).length;
+  return <Panel>{section('QB · GAME TOTALS', 'Blanket QB stats · complete-pass yards are credited to QB')}<div className="grid kpi-grid" style={{marginBottom:18}}><Kpi label="Comp / Att" value={`${completions.length}/${attempts.length}`} /><Kpi label="Pass yards" value={String(passYds)} /><Kpi label="Yds / Comp" value={avg(passYds, completions.length)} /><Kpi label="TD / INT" value={`${td} / ${ints}`} green /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>C-A</th><th>Yds</th><th>Yds/Comp</th><th>TD</th><th>INT</th><th>Sacks</th></tr></thead><tbody><tr><td><strong>QB</strong></td><td>{completions.length}-{attempts.length}</td><td>{passYds}</td><td>{avg(passYds, completions.length)}</td><td>{td}</td><td>{ints}</td><td>{sacks}</td></tr></tbody></table></div></Panel>;
+}
+
+function BallCarrierReceiverStats({ plays }: { plays: StandardPlay[] }) {
+  const stats = buildPlayerStats(plays);
+  return <Panel>{section('BALL CARRIER / RECEIVER STATS', 'Live Game · BALL CARRIER is used for both rushing and completed-pass attribution')} {stats.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>Car</th><th>Rush Yds</th><th>YPC</th><th>Rush TD</th><th>Rec</th><th>Rec Yds</th><th>YPR</th><th>Rec TD</th><th>Fum</th></tr></thead><tbody>{stats.map(s=><tr key={s.name}><td><strong>{s.name}</strong></td><td>{s.carries}</td><td>{s.rushYds}</td><td>{avg(s.rushYds,s.carries)}</td><td>{s.rushTd}</td><td>{s.receptions}</td><td>{s.recYds}</td><td>{avg(s.recYds,s.receptions)}</td><td>{s.recTd}</td><td>{s.fumbles}</td></tr>)}</tbody></table></div> : tableEmpty('No named ball carrier / receiver stats yet.')}</Panel>;
 }
 
 function SituationMetrics({ plays, defense=false }: { plays: StandardPlay[]; defense?: boolean }) {
-  const first = plays.filter(isFirstDown).length;
-  const third = plays.filter(isThirdDown), thirdConv = third.filter(isThirdDownConversion).length;
-  const rz = plays.filter(isRedZone), rzTD = rz.filter(isTD).length;
+  const first = plays.filter(isFirstDown).length; const third = plays.filter(isThirdDown), thirdConv = third.filter(isThirdDownConversion).length; const rz = plays.filter(isRedZone), rzTD = rz.filter(isTD).length;
   return <Panel>{section(defense ? 'DEFENSIVE SITUATIONS' : 'OFFENSIVE SITUATIONS', defense ? 'Live Game · opponent offense is labeled D' : 'Live Game · ODK = O')}<div className="grid kpi-grid"><Kpi label={defense?'1st Downs Allowed':'1st Downs'} value={String(first)} /><Kpi label={defense?'3rd Down % Allowed':'3rd Down %'} value={pct(thirdConv,third.length)} note={`${third.length} opportunities`} /><Kpi label="Red Zone %" value={pct(rzTD,rz.length)} note="TD / RZ snaps" /></div></Panel>;
 }
 
 function TeamOffenseStats({ plays }: { plays: StandardPlay[] }) {
-  const runs=plays.filter(isRun), passes=plays.filter(isPass), rushYds=runs.reduce((s,p)=>s+gain(p),0), completed=passes.filter(isComplete), passYds=completed.reduce((s,p)=>s+gain(p),0), attempts=passes.filter(p=>/complete|incomplete|interception|sack/.test(result(p))).length;
-  return <Panel>{section('TEAM OFFENSE STATS', 'Live Game · only ODK = O')}<div className="grid kpi-grid" style={{marginBottom:18}}><Kpi label="Total yards" value={String(rushYds+passYds)} /><Kpi label="Rush yards" value={String(rushYds)} note={`${runs.length} carries`} /><Kpi label="Pass yards" value={String(passYds)} note={`${completed.length}/${attempts}`} /><Kpi label="Touchdowns" value={String(plays.filter(isTD).length)} green /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Category</th><th>Att</th><th>Yds</th><th>Avg</th><th>TD</th></tr></thead><tbody><tr><td><strong>Rushing</strong></td><td>{runs.length}</td><td>{rushYds}</td><td>{avg(rushYds,runs.length)}</td><td>{runs.filter(isTD).length}</td></tr><tr><td><strong>Passing</strong></td><td>{completed.length}/{attempts}</td><td>{passYds}</td><td>{avg(passYds,completed.length)}</td><td>{passes.filter(isTD).length}</td></tr><tr><td><strong>Total</strong></td><td>{plays.length}</td><td>{rushYds+passYds}</td><td>{avg(rushYds+passYds,plays.length)}</td><td>{plays.filter(isTD).length}</td></tr></tbody></table></div><div className="eyebrow" style={{marginTop:12}}>Sacks: {passes.filter(isSack).length} · INT: {plays.filter(isInterception).length} · Fumbles: {plays.filter(isFumble).length}</div></Panel>;
+  const runs=plays.filter(isRun), passes=plays.filter(isPass), rushYds=runs.reduce((s,p)=>s+gain(p),0), completed=passes.filter(isComplete), passYds=completed.reduce((s,p)=>s+gain(p),0), attempts=passes.filter(isPassingAttempt).length;
+  return <Panel>{section('TEAM OFFENSE STATS', 'Live Game · only ODK = O · summary at bottom of offense report')}<div className="grid kpi-grid" style={{marginBottom:18}}><Kpi label="Total yards" value={String(rushYds+passYds)} /><Kpi label="Rush yards" value={String(rushYds)} note={`${runs.length} carries`} /><Kpi label="Pass yards" value={String(passYds)} note={`${completed.length}/${attempts}`} /><Kpi label="Touchdowns" value={String(plays.filter(isTD).length)} green /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Category</th><th>Att</th><th>Yds</th><th>Avg</th><th>TD</th></tr></thead><tbody><tr><td><strong>Rushing</strong></td><td>{runs.length}</td><td>{rushYds}</td><td>{avg(rushYds,runs.length)}</td><td>{runs.filter(isTD).length}</td></tr><tr><td><strong>Passing</strong></td><td>{completed.length}/{attempts}</td><td>{passYds}</td><td>{avg(passYds,completed.length)}</td><td>{passes.filter(isTD).length}</td></tr><tr><td><strong>Total</strong></td><td>{plays.length}</td><td>{rushYds+passYds}</td><td>{avg(rushYds+passYds,plays.length)}</td><td>{plays.filter(isTD).length}</td></tr></tbody></table></div><div className="eyebrow" style={{marginTop:12}}>Sacks: {passes.filter(isSack).length} · INT: {plays.filter(isInterception).length} · Fumbles: {plays.filter(isFumble).length}</div></Panel>;
 }
 
 function OffAnalysis({ plays }: { plays: StandardPlay[] }) {
   const runs = plays.filter(isRun), passes = plays.filter(isPass);
   const formations = [...new Set(plays.map(p => p.form).filter(Boolean))].map(form => { const rows = plays.filter(p => p.form === form); const r = rows.filter(isRun).length, pa = rows.filter(isPass).length; return { form, count: rows.length, runPct: Math.round(r / rows.length * 100), passPct: Math.round(pa / rows.length * 100), top: [...new Set(rows.map(p => p.offPlay).filter(Boolean))].map(call => ({ call, count: rows.filter(p => p.offPlay === call).length })).sort((a,b)=>b.count-a.count)[0] }; }).sort((a,b)=>b.count-a.count).slice(0, 8);
-  const playStats = (type: 'run' | 'pass') => [...new Set(plays.filter(type === 'run' ? isRun : isPass).map(p => p.offPlay).filter(Boolean))].map(call => { const rows = plays.filter(p => p.offPlay === call && (type === 'run' ? isRun(p) : isPass(p))); const y = rows.reduce((s,p)=>s+gain(p),0); return { call, count: rows.length, yds: y, avg: avg(y, rows.length), explosive: rows.filter(type === 'run' ? explosiveRun : explosivePass).length }; }).sort((a,b)=>b.count-a.count || b.yds-a.yds).slice(0, 10);
+  const playStats = (type: 'run' | 'pass') => [...new Set(plays.filter(type === 'run' ? isRun : isPass).map(p => p.offPlay).filter(Boolean))].map(call => { const rows = plays.filter(p => p.offPlay === call && (type === 'run' ? isRun(p) : isPass(p))); const y = rows.reduce((s,p)=>s+gain(p),0); return { call, count: rows.length, avg: avg(y, rows.length), explosive: rows.filter(type === 'run' ? explosiveRun : explosivePass).length }; }).sort((a,b)=>b.count-a.count).slice(0, 10);
   const situations = ['1st & long','2nd & long','2nd & medium','2nd & short','3rd & long','3rd & medium','3rd & short'];
   const sit = (p: StandardPlay) => { const d=n(p.dn), dist=n(p.dist); if(d===1)return '1st & long'; return `${d===2?'2nd':'3rd'} & ${dist>=7?'long':dist>=4?'medium':'short'}`; };
   return <div className="grid">
@@ -109,8 +107,6 @@ function OffAnalysis({ plays }: { plays: StandardPlay[] }) {
 }
 
 function DefAnalysis({ scouting, live }: { scouting: StandardPlay[]; live: StandardPlay[] }) {
-  // Scouting is from the opponent perspective: Paschal O = Paschal offense.
-  // Live Game is from our perspective: that same Paschal offense is labeled D.
   const scout = scouting.filter(p=>odk(p.odk)==='O'), current = live.filter(p=>odk(p.odk)==='D');
   const runPass = (rows: StandardPlay[]) => { const r=rows.filter(isRun).length; return rows.length?`${pct(r,rows.length)} / ${pct(rows.length-r,rows.length)}`:'—'; };
   const formations = [...new Set([...scout,...current].map(p=>p.form).filter(Boolean))].map(form=>{const s=scout.filter(p=>p.form===form),l=current.filter(p=>p.form===form);return {form,scout:s.length,live:l.length,scoutRP:runPass(s),liveRP:runPass(l),change:l.length-s.length};}).sort((a,b)=>Math.abs(b.change)-Math.abs(a.change)).slice(0,10);
@@ -118,16 +114,11 @@ function DefAnalysis({ scouting, live }: { scouting: StandardPlay[]; live: Stand
   const sit=(p:StandardPlay)=>{const d=n(p.dn),dist=n(p.dist);if(d===1)return '1st & long';return `${d===2?'2nd':'3rd'} & ${dist>=7?'long':dist>=4?'medium':'short'}`;};
   const compare=(rows:StandardPlay[])=>{const y=rows.reduce((s,p)=>s+gain(p),0);return {plays:rows.length,run:rows.filter(isRun).length,yards:y,avg:avg(y,rows.length),x:rows.filter(p=>gain(p)>=10).length};};
   const s=compare(scout),l=compare(current);
-  return <div className="grid">
-    <Panel>{section('DEF ANALYSIS', 'Paschal Scout O baseline vs Live Game D actuals · both represent Paschal offense')}<div className="comparison"><div className="compare-col"><div className="compare-head"><strong>SCOUTING · PASCHAL O</strong><span className="tag">baseline</span></div><div className="compare-stat"><span>Snaps</span><b>{s.plays}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(scout)}</b></div><div className="compare-stat"><span>Avg gain allowed</span><b>{s.avg}</b></div><div className="compare-stat"><span>Explosives allowed</span><b>{s.x}</b></div></div><div className="compare-col"><div className="compare-head"><strong>LIVE GAME · PASCHAL OFFENSE / D</strong><span className="tag green">actual</span></div><div className="compare-stat"><span>Snaps</span><b>{l.plays}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(current)}</b></div><div className="compare-stat"><span>Avg gain allowed</span><b>{l.avg}</b></div><div className="compare-stat"><span>Explosives allowed</span><b>{l.x}</b></div></div></div></Panel>
-    <Panel>{section('RUN / PASS BY SITUATION', 'Paschal Scout O vs Live Game D')}<div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Scout O R/P</th><th>Live D R/P</th><th>Live snaps</th></tr></thead><tbody>{situations.map(label=>{const a=scout.filter(p=>sit(p)===label),b=current.filter(p=>sit(p)===label);return <tr key={label}><td><strong>{label}</strong></td><td>{runPass(a)}</td><td>{runPass(b)}</td><td>{b.length}</td></tr>})}</tbody></table></div></Panel>
-    <Panel>{section('FORMATION COMPARISON', 'Paschal Scout O vs Live Game D')}<div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Scout O</th><th>Live D</th><th>Scout R/P</th><th>Live R/P</th><th>Δ snaps</th></tr></thead><tbody>{formations.map(f=><tr key={f.form}><td><strong>{f.form}</strong></td><td>{f.scout}</td><td>{f.live}</td><td>{f.scoutRP}</td><td>{f.liveRP}</td><td className={f.change>0?'gain-positive':f.change<0?'gain-negative':''}>{f.change>0?`+${f.change}`:f.change}</td></tr>)}</tbody></table></div></Panel>
-    <Panel>{section('DEFENSIVE TAKEAWAYS', 'Live Game D · opponent offense actually played against us')}<div className="grid kpi-grid"><Kpi label="Yards allowed" value={String(l.yards)} /><Kpi label="Rush yards" value={String(current.filter(isRun).reduce((a,p)=>a+gain(p),0))} /><Kpi label="Pass yards" value={String(current.filter(isPass).filter(isComplete).reduce((a,p)=>a+gain(p),0))} /><Kpi label="Takeaways" value={String(current.filter(p=>isInterception(p)||isFumble(p)).length)} green /></div></Panel>
-  </div>;
+  return <div className="grid"><Panel>{section('DEF ANALYSIS', 'Paschal Scout O baseline vs Live Game D actuals · both represent Paschal offense')}<div className="comparison"><div className="compare-col"><div className="compare-head"><strong>SCOUTING · PASCHAL O</strong><span className="tag">baseline</span></div><div className="compare-stat"><span>Snaps</span><b>{s.plays}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(scout)}</b></div><div className="compare-stat"><span>Avg gain allowed</span><b>{s.avg}</b></div><div className="compare-stat"><span>Explosives allowed</span><b>{s.x}</b></div></div><div className="compare-col"><div className="compare-head"><strong>LIVE GAME · PASCHAL OFFENSE / D</strong><span className="tag green">actual</span></div><div className="compare-stat"><span>Snaps</span><b>{l.plays}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(current)}</b></div><div className="compare-stat"><span>Avg gain allowed</span><b>{l.avg}</b></div><div className="compare-stat"><span>Explosives allowed</span><b>{l.x}</b></div></div></div></Panel><Panel>{section('RUN / PASS BY SITUATION', 'Paschal Scout O vs Live Game D')}<div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Scout O R/P</th><th>Live D R/P</th><th>Live snaps</th></tr></thead><tbody>{situations.map(label=>{const a=scout.filter(p=>sit(p)===label),b=current.filter(p=>sit(p)===label);return <tr key={label}><td><strong>{label}</strong></td><td>{runPass(a)}</td><td>{runPass(b)}</td><td>{b.length}</td></tr>})}</tbody></table></div></Panel><Panel>{section('FORMATION COMPARISON', 'Paschal Scout O vs Live Game D')}<div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Scout O</th><th>Live D</th><th>Scout R/P</th><th>Live R/P</th><th>Δ snaps</th></tr></thead><tbody>{formations.map(f=><tr key={f.form}><td><strong>{f.form}</strong></td><td>{f.scout}</td><td>{f.live}</td><td>{f.scoutRP}</td><td>{f.liveRP}</td><td className={f.change>0?'gain-positive':f.change<0?'gain-negative':''}>{f.change>0?`+${f.change}`:f.change}</td></tr>)}</tbody></table></div></Panel><Panel>{section('DEFENSIVE TAKEAWAYS', 'Live Game D · opponent offense actually played against us')}<div className="grid kpi-grid"><Kpi label="Yards allowed" value={String(l.yards)} /><Kpi label="Rush yards" value={String(current.filter(isRun).reduce((a,p)=>a+gain(p),0))} /><Kpi label="Pass yards" value={String(current.filter(isPass).filter(isComplete).reduce((a,p)=>a+gain(p),0))} /><Kpi label="Takeaways" value={String(current.filter(p=>isInterception(p)||isFumble(p)).length)} green /></div></Panel></div>;
 }
 
 function DefenseTeamTotals({ plays }: { plays: StandardPlay[] }) {
-  const runs=plays.filter(isRun), passes=plays.filter(isPass), rushYds=runs.reduce((s,p)=>s+gain(p),0), completed=passes.filter(isComplete), passYds=completed.reduce((s,p)=>s+gain(p),0), attempts=passes.filter(p=>/complete|incomplete|interception|sack/.test(result(p))).length;
+  const runs=plays.filter(isRun), passes=plays.filter(isPass), rushYds=runs.reduce((s,p)=>s+gain(p),0), completed=passes.filter(isComplete), passYds=completed.reduce((s,p)=>s+gain(p),0), attempts=passes.filter(isPassingAttempt).length;
   return <Panel>{section('DEFENSE TEAM TOTALS', 'Opponent offense from Live Game D entries')}<div className="grid kpi-grid" style={{marginBottom:18}}><Kpi label="Total yards allowed" value={String(rushYds+passYds)} /><Kpi label="Rush allowed" value={String(rushYds)} note={`${runs.length} carries`} /><Kpi label="Pass allowed" value={String(passYds)} note={`${completed.length}/${attempts}`} /><Kpi label="Takeaways" value={String(plays.filter(p=>isInterception(p)||isFumble(p)).length)} green /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Category</th><th>Att</th><th>Yds</th><th>Avg</th><th>TD</th></tr></thead><tbody><tr><td><strong>Rushing allowed</strong></td><td>{runs.length}</td><td>{rushYds}</td><td>{avg(rushYds,runs.length)}</td><td>{runs.filter(isTD).length}</td></tr><tr><td><strong>Passing allowed</strong></td><td>{completed.length}/{attempts}</td><td>{passYds}</td><td>{avg(passYds,completed.length)}</td><td>{passes.filter(isTD).length}</td></tr><tr><td><strong>Total</strong></td><td>{plays.length}</td><td>{rushYds+passYds}</td><td>{avg(rushYds+passYds,plays.length)}</td><td>{plays.filter(isTD).length}</td></tr></tbody></table></div><div className="eyebrow" style={{marginTop:12}}>Sacks: {passes.filter(isSack).length} · INT: {plays.filter(isInterception).length} · Fumbles: {plays.filter(isFumble).length}</div></Panel>;
 }
 
@@ -136,16 +127,8 @@ export default function ReportsHubPage({ data }: Props) {
   const offense = useMemo(()=>data.live.filter(p=>odk(p.odk)==='O'),[data.live]);
   const defense = useMemo(()=>data.live.filter(p=>odk(p.odk)==='D'),[data.live]);
   const exportCsv=()=>{const rows=active==='offense'?offense:defense;const header=['Play #','ODK','Down','Distance','Hash','Yard Line','Play Type','Result','GN/LS','Ball Carrier','Personnel','Off Form','Backfield','Motion','Scheme','Off Play','Play Dir','Defense'];const cell=(v:string)=>`"${String(v??'').replaceAll('"','""')}"`;const body=rows.map(p=>[p.playNo,p.odk,p.dn,p.dist,p.hash,p.yardLn,p.type,p.result,p.gnls,p.carrier,p.personnel,p.form,p.backfield,p.motion,p.scheme,p.offPlay,p.dir,p.defense].map(cell).join(','));const blob=new Blob([[header.map(cell).join(','),...body].join('\r\n')],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`coach-hudl-live-${active}-report.csv`;a.click();URL.revokeObjectURL(a.href);};
-  return <div className="content"><PageHead eyebrow="Reports · live box score & analysis" title="Game stats that update with every snap." description="Live Game is the source of truth: O entries drive offense, D entries drive defensive analysis and team totals. Scouting remains the comparison baseline." actions={<button className="btn btn-primary" onClick={exportCsv} data-testid="button-export-report"><Download /> Export {active} CSV</button>} />
-    <div className="filters report-tabs"><button className={`btn ${active==='offense'?'btn-green':'btn-ghost'}`} onClick={()=>setActive('offense')} data-testid="button-report-live-offense"><Zap /> OFFENSE</button><button className={`btn ${active==='defense'?'btn-primary':'btn-ghost'}`} onClick={()=>setActive('defense')} data-testid="button-report-defense"><Shield /> DEFENSE</button><span className="eyebrow">{active==='offense'?offense.length:defense.length} live snaps in view</span></div>
-    {active==='offense'?<><SituationMetrics plays={offense}/><TeamOffenseStats plays={offense}/><OffAnalysis plays={offense}/></>:<><SituationMetrics plays={defense} defense/><DefenseTeamTotals plays={defense}/><DefAnalysis scouting={data.scouting} live={data.live}/></>}
-  </div>;
+  return <div className="content"><PageHead eyebrow="Reports · live box score & analysis" title="Game stats that update with every snap." description="Live Game is the source of truth: O entries drive offense, D entries drive defensive analysis and team totals. Scouting remains the comparison baseline." actions={<button className="btn btn-primary" onClick={exportCsv} data-testid="button-export-report"><Download /> Export {active} CSV</button>} /><div className="filters report-tabs"><button className={`btn ${active==='offense'?'btn-green':'btn-ghost'}`} onClick={()=>setActive('offense')} data-testid="button-report-live-offense"><Zap /> OFFENSE</button><button className={`btn ${active==='defense'?'btn-primary':'btn-ghost'}`} onClick={()=>setActive('defense')} data-testid="button-report-defense"><Shield /> DEFENSE</button><span className="eyebrow">{active==='offense'?offense.length:defense.length} live snaps in view</span></div>{active==='offense'?<><SituationMetrics plays={offense}/><OffAnalysis plays={offense}/><BallCarrierReceiverStats plays={offense}/><QBStats plays={offense}/><TeamOffenseStats plays={offense}/></>:<><SituationMetrics plays={defense} defense/><DefenseTeamTotals plays={defense}/><DefAnalysis scouting={data.scouting} live={data.live}/></>}</div>;
 }
 
-function Panel({ children }: { children: React.ReactNode }) {
-  return <div className="panel">{children}</div>;
-}
-
-function PageHead({ eyebrow, title, description, actions }: { eyebrow:string; title:string; description:string; actions?:React.ReactNode }) {
-  return <div className="page-head"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{actions&&<div className="page-actions">{actions}</div>}</div>;
-}
+function Panel({ children }: { children: React.ReactNode }) { return <div className="panel">{children}</div>; }
+function PageHead({ eyebrow, title, description, actions }: { eyebrow:string; title:string; description:string; actions?:React.ReactNode }) { return <div className="page-head"><div><div className="eyebrow">{eyebrow}</div><h1>{title}</h1><p>{description}</p></div>{actions&&<div className="page-actions">{actions}</div>}</div>; }
