@@ -36,7 +36,7 @@ function HudlCsvExportBar() {
         window.alert(kind === 'live' ? 'There are no live plays to export yet.' : 'There are no Data Room plays to export yet.');
         return;
       }
-      const prefix = game ? \\`${'${game.date || new Date().toISOString().slice(0, 10)}'}_${'${game.opponent || 'Game'}'}\\` : new Date().toISOString().slice(0, 10);
+      const prefix = game ? \`${'${game.date || new Date().toISOString().slice(0, 10)}'}_${'${game.opponent || 'Game'}'}\` : new Date().toISOString().slice(0, 10);
       download(hudlCsvFilename(prefix, kind === 'live' ? 'LiveGame' : 'DataRoom'), standardPlaysToHudlCsv(plays));
     } finally {
       window.setTimeout(() => setBusy(false), 250);
@@ -67,9 +67,12 @@ if (!source.includes('function HudlCsvExportBar()')) {
 }
 
 if (!source.includes('<HudlCsvExportBar />')) {
-  const appOpen = /(?:export )?function App\s*\([^)]*\)\s*\{\s*/;
-  if (!appOpen.test(source)) throw new Error('Could not find App opening while installing Hudl CSV export.');
-  source = source.replace(appOpen, match => `${match}  <HudlCsvExportBar />\n`);
+  const appStart = source.search(/(?:export )?function App\s*\(/);
+  if (appStart < 0) throw new Error('Could not find App component while installing Hudl CSV export.');
+  const returnIndex = source.indexOf('return (', appStart);
+  if (returnIndex < 0) throw new Error('Could not find App return while installing Hudl CSV export.');
+  const insertAt = returnIndex + 'return ('.length;
+  source = source.slice(0, insertAt) + '\n      <HudlCsvExportBar />' + source.slice(insertAt);
 }
 
 fs.writeFileSync(appPath, source);
