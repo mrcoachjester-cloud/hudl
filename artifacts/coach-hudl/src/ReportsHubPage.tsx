@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { BarChart3, Download, Shield, TrendingUp, Users, Zap } from 'lucide-react';
+import { BarChart3, Download, Shield, Zap } from 'lucide-react';
 import type { StandardPlay } from './lib/footballData';
 
 export type ReportsDataset = {
@@ -8,7 +8,6 @@ export type ReportsDataset = {
 };
 
 type Props = { data: ReportsDataset };
-
 type StatRow = { name: string; att: number; yds: number; td: number; fum: number };
 
 const n = (value: string) => {
@@ -28,11 +27,35 @@ const isRun = (p: StandardPlay) => p.type.toLowerCase().includes('run');
 const isPass = (p: StandardPlay) => p.type.toLowerCase().includes('pass');
 const gain = (p: StandardPlay) => n(p.gnls);
 const result = (p: StandardPlay) => p.result.toLowerCase();
+const down = (p: StandardPlay) => n(p.dn);
+const distance = (p: StandardPlay) => n(p.dist);
 const isTD = (p: StandardPlay) => /touchdown|\btd\b/.test(result(p));
 const isFumble = (p: StandardPlay) => /fumble/.test(result(p));
 const isInterception = (p: StandardPlay) => /interception|\bint\b/.test(result(p));
 const isSack = (p: StandardPlay) => /sack/.test(result(p));
 const isComplete = (p: StandardPlay) => /complete/.test(result(p)) && !/incomplete/.test(result(p));
+const isNegativePlay = (p: StandardPlay) => isSack(p) || /incomplete|interception/.test(result(p));
+
+// A first down is taken from the Live Game Result when it is explicitly charted,
+// with a gain >= distance fallback for normal non-negative plays.
+const isFirstDown = (p: StandardPlay) => {
+  if (/first\s*down|1st\s*down|fd/.test(result(p))) return true;
+  if (isNegativePlay(p)) return false;
+  const d = down(p);
+  return d >= 1 && d <= 4 && distance(p) > 0 && gain(p) >= distance(p);
+};
+const isThirdDown = (p: StandardPlay) => down(p) === 3;
+const isThirdDownConversion = (p: StandardPlay) => isThirdDown(p) && isFirstDown(p);
+
+// Current Live Game columns do not carry a drive/possession id. We therefore
+// report Red Zone TD % transparently as TDs / red-zone snaps instead of inventing
+// a possession-based conversion rate.
+const isRedZone = (p: StandardPlay) => {
+  const yard = p.yardLn.trim().toLowerCase();
+  if (/opp\s*(?:[1-9]|1\d|2[0-5])\b/.test(yard)) return true;
+  const match = yard.match(/(?:opp|opponent)?\s*(?:goal|g)?\s*(\d{1,2})\s*$/);
+  return !!match && Number(match[1]) <= 25;
+};
 const explosiveRun = (p: StandardPlay) => isRun(p) && gain(p) >= 10;
 const explosivePass = (p: StandardPlay) => isPass(p) && gain(p) >= 15;
 
@@ -74,6 +97,24 @@ function receivingStats(plays: StandardPlay[]): StatRow[] {
   return [...by.values()].sort((a, b) => b.yds - a.yds || b.att - a.att);
 }
 
+function SituationMetrics({ plays, defense = false }: { plays: StandardPlay[]; defense?: boolean }) {
+  const firstDowns = plays.filter(isFirstDown).length;
+  const thirdDowns = plays.filter(isThirdDown);
+  const thirdConversions = thirdDowns.filter(isThirdDownConversion).length;
+  const redZone = plays.filter(isRedZone);
+  const redZoneTDs = redZone.filter(isTD).length;
+  const label = defense ? 'Allowed' : '';
+  return <Panel>
+    {section(defense ? 'GAME SITUATIONS ALLOWED' : 'GAME SITUATIONS', defense ? 'Live Game · D entries · opponent efficiency' : 'Live Game · O entries · in-game efficiency')}
+    <div className="grid kpi-grid">
+      <Kpi label={`1st Downs ${label}`} value={String(firstDowns)} note="live game" green />
+      <Kpi label={`3rd Down % ${label}`} value={pct(thirdConversions, thirdDowns.length)} note={`${thirdConversions}/${thirdDowns.length} converted`} />
+      <Kpi label={`Red Zone % ${label}`} value={pct(redZoneTDs, redZone.length)} note={`${redZoneTDs} TD / ${redZone.length} RZ snaps`} />
+      <Kpi label={`3rd Down Plays ${label}`} value={String(thirdDowns.length)} note="opportunities" />
+    </div>
+  </Panel>;
+}
+
 function TeamOffenseStats({ plays }: { plays: StandardPlay[] }) {
   const runs = plays.filter(isRun);
   const passes = plays.filter(isPass);
@@ -88,8 +129,7 @@ function TeamOffenseStats({ plays }: { plays: StandardPlay[] }) {
   const receivers = receivingStats(plays);
   const totalYds = rushingYds + passYds;
   return <div className="grid split-grid">
-    <Panel title="TEAM OFFENSE">
-      {section('TEAM OFFENSE', 'Live ODK = O · box-score totals')}
+    <Panel>{section('TEAM OFFENSE', 'Live ODK = O · box-score totals')}
       <div className="grid kpi-grid" style={{ marginBottom: 18 }}>
         <Kpi label="Total offense" value={String(totalYds)} note="yards" green />
         <Kpi label="Plays" value={String(plays.length)} note={`${pct(runs.length, plays.length)} run`} />
@@ -103,12 +143,10 @@ function TeamOffenseStats({ plays }: { plays: StandardPlay[] }) {
       </tbody></table></div>
       <div className="eyebrow" style={{ marginTop: 12 }}>Sacks: {sacks} · Turnovers: {passes.filter(isInterception).length + plays.filter(isFumble).length}</div>
     </Panel>
-    <Panel title="RUSHING / RECEIVING">
-      {section('RUSHING', 'Ball-carrier production')}
+    <Panel>{section('RUSHING / RECEIVING', 'Ball carrier production from Live Game')}
       {rushers.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>Car</th><th>Yds</th><th>Avg</th><th>TD</th><th>Fum</th></tr></thead><tbody>{rushers.map(r => <tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.att}</td><td>{r.yds}</td><td>{avg(r.yds, r.att)}</td><td>{r.td}</td><td>{r.fum}</td></tr>)}</tbody></table></div> : tableEmpty('No rushing player data yet.')}
       <div style={{ height: 22 }} />
-      {section('RECEIVING', 'Completed passes by carrier')}
-      {receivers.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>Rec</th><th>Yds</th><th>Avg</th><th>TD</th></tr></thead><tbody>{receivers.map(r => <tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.att}</td><td>{r.yds}</td><td>{avg(r.yds, r.att)}</td><td>{r.td}</td></tr>)}</tbody></table></div> : tableEmpty('No completed passes yet.')}
+      {receivers.length ? <div><div className="eyebrow" style={{ marginBottom: 10 }}>RECEIVING</div><div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>Rec</th><th>Yds</th><th>Avg</th><th>TD</th></tr></thead><tbody>{receivers.map(r => <tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.att}</td><td>{r.yds}</td><td>{avg(r.yds, r.att)}</td><td>{r.td}</td></tr>)}</tbody></table></div></div> : tableEmpty('No completed passes yet.')}
     </Panel>
   </div>;
 }
@@ -127,7 +165,7 @@ function OffAnalysis({ plays }: { plays: StandardPlay[] }) {
     <Panel>{section('TOP FORMATIONS', 'Usage and identity')}{formations.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>R%</th><th>P%</th><th>Favorite call</th></tr></thead><tbody>{formations.map(f=><tr key={f.form}><td><strong>{f.form}</strong></td><td>{f.count}</td><td>{f.runPct}%</td><td>{f.passPct}%</td><td>{f.top?.call ?? '—'} <span className="eyebrow">({f.top?.count ?? 0})</span></td></tr>)}</tbody></table></div>:tableEmpty('No offensive formations yet.')}</Panel>
     <div className="grid split-grid"><Panel>{section('TOP RUN PLAYS', 'Calls · average gain · explosives')}{playStats('run').length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg</th><th>X</th></tr></thead><tbody>{playStats('run').map(p=><tr key={p.call}><td><strong>{p.call}</strong></td><td>{p.count}</td><td>{p.avg}</td><td>{p.explosive}</td></tr>)}</tbody></table></div>:tableEmpty('No run calls yet.')}</Panel><Panel>{section('TOP PASS PLAYS', 'Calls · average gain · explosives')}{playStats('pass').length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg</th><th>X</th></tr></thead><tbody>{playStats('pass').map(p=><tr key={p.call}><td><strong>{p.call}</strong></td><td>{p.count}</td><td>{p.avg}</td><td>{p.explosive}</td></tr>)}</tbody></table></div>:tableEmpty('No pass calls yet.')}</Panel></div>
     <Panel>{section('DOWN & DISTANCE', 'Live offensive tendency by situation')}<div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Plays</th><th>R/P</th><th>Avg</th><th>Top call</th></tr></thead><tbody>{situations.map(label=>{const rows=plays.filter(p=>sit(p)===label);const r=rows.filter(isRun).length;const y=rows.reduce((s,p)=>s+gain(p),0);const calls=[...new Set(rows.map(p=>p.offPlay).filter(Boolean))].map(call=>({call,count:rows.filter(p=>p.offPlay===call).length})).sort((a,b)=>b.count-a.count)[0];return <tr key={label}><td><strong>{label}</strong></td><td>{rows.length}</td><td>{rows.length?`${pct(r,rows.length)} / ${pct(rows.length-r,rows.length)}`:'—'}</td><td>{avg(y,rows.length)}</td><td>{calls?.call??'—'}</td></tr>})}</tbody></table></div></Panel>
-    <div className="grid split-grid"><Panel>{section('EXPLOSIVE PLAYS', '10+ rush · 15+ pass')}{[...plays.filter(p=>explosiveRun(p)||explosivePass(p))].sort((a,b)=>gain(b)-gain(a)).slice(0,10).length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Type</th><th>Gain</th><th>Formation</th></tr></thead><tbody>{plays.filter(p=>explosiveRun(p)||explosivePass(p)).sort((a,b)=>gain(b)-gain(a)).slice(0,10).map(p=><tr key={p.playNo}><td>#{p.playNo} · <strong>{p.offPlay}</strong></td><td>{p.type}</td><td className="gain-positive">+{gain(p)}</td><td>{p.form}</td></tr>)}</tbody></table></div>:tableEmpty('No explosive plays yet.')}</Panel><Panel>{section('FIELD POSITION', 'Red-zone and field-zone snapshot')}<div className="feed"><div className="feed-row"><span className="feed-num">RZ</span><div className="feed-main"><strong>{plays.filter(p=>/opp\s*(?:[1-9]|1\d|2[0-5])\b/i.test(p.yardLn)).length}</strong><span>snaps inside opponent 25</span></div></div><div className="feed-row"><span className="feed-num">3D</span><div className="feed-main"><strong>{plays.filter(p=>n(p.dn)===3).length}</strong><span>third-down snaps</span></div></div><div className="feed-row"><span className="feed-num">TD</span><div className="feed-main"><strong>{plays.filter(isTD).length}</strong><span>offensive touchdowns charted</span></div></div></div></Panel></div>
+    <div className="grid split-grid"><Panel>{section('EXPLOSIVE PLAYS', '10+ rush · 15+ pass')}{plays.filter(p=>explosiveRun(p)||explosivePass(p)).sort((a,b)=>gain(b)-gain(a)).slice(0,10).length?<div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Type</th><th>Gain</th><th>Formation</th></tr></thead><tbody>{plays.filter(p=>explosiveRun(p)||explosivePass(p)).sort((a,b)=>gain(b)-gain(a)).slice(0,10).map(p=><tr key={p.playNo}><td>#{p.playNo} · <strong>{p.offPlay}</strong></td><td>{p.type}</td><td className="gain-positive">+{gain(p)}</td><td>{p.form}</td></tr>)}</tbody></table></div>:tableEmpty('No explosive plays yet.')}</Panel><Panel>{section('FIELD POSITION', 'Live red-zone snapshot')}<div className="feed"><div className="feed-row"><span className="feed-num">RZ</span><div className="feed-main"><strong>{plays.filter(isRedZone).length}</strong><span>snaps inside opponent 25</span></div></div><div className="feed-row"><span className="feed-num">3D</span><div className="feed-main"><strong>{plays.filter(isThirdDown).length}</strong><span>third-down snaps</span></div></div><div className="feed-row"><span className="feed-num">FD</span><div className="feed-main"><strong>{plays.filter(isFirstDown).length}</strong><span>first downs</span></div></div><div className="feed-row"><span className="feed-num">TD</span><div className="feed-main"><strong>{plays.filter(isTD).length}</strong><span>offensive touchdowns charted</span></div></div></div></Panel></div>
   </div>;
 }
 
@@ -159,11 +197,11 @@ export default function ReportsHubPage({ data }: Props) {
   const exportCsv=()=>{const rows=active==='offense'?offense:defense;const header=['Play #','ODK','Down','Distance','Hash','Yard Line','Play Type','Result','GN/LS','Ball Carrier','Personnel','Off Form','Backfield','Motion','Scheme','Off Play','Play Dir','Defense'];const cell=(v:string)=>`"${String(v??'').replaceAll('"','""')}"`;const body=rows.map(p=>[p.playNo,p.odk,p.dn,p.dist,p.hash,p.yardLn,p.type,p.result,p.gnls,p.carrier,p.personnel,p.form,p.backfield,p.motion,p.scheme,p.offPlay,p.dir,p.defense].map(cell).join(','));const blob=new Blob([[header.map(cell).join(','),...body].join('\r\n')],{type:'text/csv'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`coach-hudl-live-${active}-report.csv`;a.click();URL.revokeObjectURL(a.href);};
   return <div className="content"><PageHead eyebrow="Reports · live box score & analysis" title="Game stats that update with every snap." description="Live Game is the source of truth: O entries drive offense, D entries drive defensive analysis and team totals. Scouting remains the comparison baseline." actions={<button className="btn btn-primary" onClick={exportCsv} data-testid="button-export-report"><Download /> Export {active} CSV</button>} />
     <div className="filters report-tabs"><button className={`btn ${active==='offense'?'btn-green':'btn-ghost'}`} onClick={()=>setActive('offense')} data-testid="button-report-live-offense"><Zap /> OFFENSE</button><button className={`btn ${active==='defense'?'btn-primary':'btn-ghost'}`} onClick={()=>setActive('defense')} data-testid="button-report-defense"><Shield /> DEFENSE</button><span className="eyebrow">{active==='offense'?offense.length:defense.length} live snaps in view</span></div>
-    {active==='offense'?<><TeamOffenseStats plays={offense}/><OffAnalysis plays={offense}/></>:<><DefAnalysis scouting={data.scouting} live={data.live}/><DefenseTeamTotals plays={defense}/></>}
+    {active==='offense'?<><SituationMetrics plays={offense}/><TeamOffenseStats plays={offense}/><OffAnalysis plays={offense}/></>:<><SituationMetrics plays={defense} defense/><DefenseTeamTotals plays={defense}/><DefAnalysis scouting={data.scouting} live={data.live}/></>}
   </div>;
 }
 
-function Panel({ children, title }: { children: React.ReactNode; title?: string }) {
+function Panel({ children }: { children: React.ReactNode }) {
   return <div className="panel">{children}</div>;
 }
 
