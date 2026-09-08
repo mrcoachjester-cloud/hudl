@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const root = path.resolve(process.cwd());
 const appPath = path.join(root, 'src', 'App.tsx');
+const reportsPath = path.join(root, 'src', 'ReportsHubPage.tsx');
 
 if (!fs.existsSync(appPath)) process.exit(0);
 
@@ -27,7 +28,7 @@ if (source.includes(route)) source = source.replace(route, replacement);
 // from the opponent's perspective (Paschal O = Paschal offense), while Live
 // Game is from our team's perspective (Paschal offense is charted as D).
 // Load the matching scouting session for the active game and keep that source
-// intact; ReportsHubPage handles the O/D perspective mapping for comparisons.
+// intact. ReportsHubPage then maps opponent O -> our DEFENSE comparison.
 const oldLoader = `        let livePlays: Play[] = [];
         let scoutingPlays: Play[] = [];
 
@@ -64,8 +65,7 @@ const newLoader = `        let livePlays: Play[] = [];
             const normalizedOpponent = activeGame.opponent.trim().toLowerCase();
             const session =
               sessions.find(item => item.game_id === activeGameId) ??
-              sessions.find(item => item.opponent.trim().toLowerCase() === normalizedOpponent) ??
-              sessions[0];
+              sessions.find(item => item.opponent.trim().toLowerCase() === normalizedOpponent);
 
             if (session) {
               const remoteScout = await getScoutingPlays(session.id);
@@ -86,4 +86,18 @@ if (source.includes(oldLoader)) {
 }
 
 fs.writeFileSync(appPath, source);
-console.log('Live reports page wired into /reports with Supabase scouting data');
+
+if (fs.existsSync(reportsPath)) {
+  let reports = fs.readFileSync(reportsPath, 'utf8');
+  // IMPORTANT: scouting O is the opponent offense. Live D is our defense.
+  // Do not compare Live D against scouting D, because that would compare two
+  // different football perspectives.
+  const oldPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='D'), current = live.filter(p=>odk(p.odk)==='D');";
+  const newPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='O'), current = live.filter(p=>odk(p.odk)==='D');";
+  if (reports.includes(oldPerspective)) {
+    reports = reports.replace(oldPerspective, newPerspective);
+  }
+  fs.writeFileSync(reportsPath, reports);
+}
+
+console.log('Live reports wired to Supabase scouting with opponent-perspective O/D mapping');
