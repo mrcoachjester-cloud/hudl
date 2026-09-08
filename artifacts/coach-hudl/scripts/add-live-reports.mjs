@@ -23,5 +23,67 @@ const route = '<Route path="/reports"><ReportsHubPage data={data} /></Route>';
 const replacement = '<Route path="/reports"><LiveReportsPage data={data} /></Route>';
 if (source.includes(route)) source = source.replace(route, replacement);
 
+// Reports need the same scouting board used by Overview. The scouting chart is
+// from the opponent's perspective (Paschal O = Paschal offense), while Live
+// Game is from our team's perspective (Paschal offense is charted as D).
+// Load the matching scouting session for the active game and keep that source
+// intact; ReportsHubPage handles the O/D perspective mapping for comparisons.
+const oldLoader = `        let livePlays: Play[] = [];
+        let scoutingPlays: Play[] = [];
+
+        try {
+          if (activeGameId) {
+            const remoteLive = await getLivePlays(activeGameId);
+            if (remoteLive.length > 0) {
+              livePlays = remoteLive.map(livePlayToStandard);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch remote live plays:', e);
+        }
+`;
+
+const newLoader = `        let livePlays: Play[] = [];
+        let scoutingPlays: Play[] = [];
+
+        try {
+          if (activeGameId) {
+            const remoteLive = await getLivePlays(activeGameId);
+            if (remoteLive.length > 0) {
+              livePlays = remoteLive.map(livePlayToStandard);
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch remote live plays:', e);
+        }
+
+        try {
+          const activeGame = games.find(game => game.id === activeGameId);
+          if (activeGame) {
+            const sessions = await getScoutingSessions(activeGame.season_id);
+            const normalizedOpponent = activeGame.opponent.trim().toLowerCase();
+            const session =
+              sessions.find(item => item.game_id === activeGameId) ??
+              sessions.find(item => item.opponent.trim().toLowerCase() === normalizedOpponent) ??
+              sessions[0];
+
+            if (session) {
+              const remoteScout = await getScoutingPlays(session.id);
+              if (remoteScout.length > 0) {
+                scoutingPlays = remoteScout.map(scoutingPlayToStandard);
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Could not fetch matching scouting data:', e);
+        }
+`;
+
+if (source.includes(oldLoader)) {
+  source = source.replace(oldLoader, newLoader);
+} else if (!source.includes("const remoteScout = await getScoutingPlays(session.id);")) {
+  throw new Error('Reports patch: Supabase play loader block not found');
+}
+
 fs.writeFileSync(appPath, source);
-console.log('Live reports page wired into /reports');
+console.log('Live reports page wired into /reports with Supabase scouting data');
