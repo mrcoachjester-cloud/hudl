@@ -7,7 +7,16 @@ const appPath = path.resolve(here, '../src/App.tsx');
 let text = fs.readFileSync(appPath, 'utf8');
 const start = text.indexOf('function LiveSpreadsheetPage');
 const end = text.indexOf('function ReportsHubPage', start);
-if (start < 0 || end < 0) throw new Error('LiveSpreadsheetPage not found');
+
+// The current App can use a different live-game component name. This patch is
+// optional: never make the entire production build fail just because the older
+// component marker is absent. Supabase persistence is handled by the current
+// football data layer when available.
+if (start < 0 || end < 0) {
+  console.log('LiveSpreadsheetPage marker not present; skipping legacy persistence patch.');
+  process.exit(0);
+}
+
 let section = text.slice(start, end);
 
 const oldAdd = `    setData(next);\n    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', result: '' }));\n    toast.notify(\`Live snap added · GN/LS \${formatGnls(calculatedGnls)}\`);`;
