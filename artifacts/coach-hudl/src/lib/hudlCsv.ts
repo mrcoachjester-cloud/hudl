@@ -64,6 +64,7 @@ export function parseHudlCsv(csv: string): StandardPlay[] {
     type: ['play type', 'type'],
     result: ['result'],
     gnls: ['gn ls', 'gn/ls', 'gain loss'],
+    carrier: ['ball carrier', 'ballcarrier', 'carrier', 'ball carrier #', 'ball carrier number'],
     personnel: ['personnel'],
     form: ['off form', 'formation'],
     backfield: ['backfield'],
@@ -90,6 +91,7 @@ export function parseHudlCsv(csv: string): StandardPlay[] {
     const yardLn = numberText(text(values, indexes, 'yardLn'));
     const type = text(values, indexes, 'type') || 'Run';
     const result = text(values, indexes, 'result');
+    const carrier = text(values, indexes, 'carrier');
     const offPlay = text(values, indexes, 'offPlay');
     const form = text(values, indexes, 'form');
     const personnel = text(values, indexes, 'personnel');
@@ -107,7 +109,7 @@ export function parseHudlCsv(csv: string): StandardPlay[] {
       dist: numberText(text(values, indexes, 'dist'), '10'),
       hash: text(values, indexes, 'hash') || 'M',
       gnls: gain || '0',
-      carrier: '',
+      carrier,
       yardLn: yardLn || '—',
       type,
       result: result || '—',
