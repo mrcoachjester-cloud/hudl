@@ -10,9 +10,13 @@ let source = fs.readFileSync(appPath, 'utf8');
 
 const importLine = "import LiveReportsPage from './ReportsHubPage';";
 if (!source.includes(importLine)) {
-  const marker = "import { isSupabaseConfigured } from './lib/supabase';";
-  if (!source.includes(marker)) throw new Error('Reports patch: App.tsx import marker not found');
-  source = source.replace(marker, `${marker}\n${importLine}`);
+  // App.tsx has been patched by earlier prebuild scripts, so do not depend on
+  // one exact import existing. Insert after the import block instead.
+  const imports = [...source.matchAll(/^import .*;$/gm)];
+  if (!imports.length) throw new Error('Reports patch: App.tsx import block not found');
+  const lastImport = imports[imports.length - 1];
+  const insertAt = (lastImport.index ?? 0) + lastImport[0].length;
+  source = source.slice(0, insertAt) + `\n${importLine}` + source.slice(insertAt);
 }
 
 const route = '<Route path="/reports"><ReportsHubPage data={data} /></Route>';
