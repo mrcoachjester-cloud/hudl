@@ -36,7 +36,9 @@ function HudlCsvExportBar() {
         window.alert(kind === 'live' ? 'There are no live plays to export yet.' : 'There are no Data Room plays to export yet.');
         return;
       }
-      const prefix = game ? \`${'${game.date || new Date().toISOString().slice(0, 10)}'}_${'${game.opponent || 'Game'}'}\` : new Date().toISOString().slice(0, 10);
+      const prefix = game
+        ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
+        : new Date().toISOString().slice(0, 10);
       download(hudlCsvFilename(prefix, kind === 'live' ? 'LiveGame' : 'DataRoom'), standardPlaysToHudlCsv(plays));
     } finally {
       window.setTimeout(() => setBusy(false), 250);
