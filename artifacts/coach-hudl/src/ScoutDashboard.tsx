@@ -1,9 +1,8 @@
-import { useMemo, useState } from 'react';
-import { Search, TrendingUp, Target, Shield, Activity, Layers, Zap } from 'lucide-react';
+import { type CSSProperties, type ReactNode, useMemo, useState } from 'react';
+import { Search, TrendingUp, Target, Activity } from 'lucide-react';
 import type { StandardPlay } from './lib/footballData';
 
 type Play = StandardPlay;
-
 const n = (v: string) => { const m = String(v ?? '').match(/-?\d+/); return m ? Number(m[0]) : 0; };
 const pct = (a: number, b: number) => b ? Math.round((a / b) * 100) : 0;
 const avg = (plays: Play[]) => plays.length ? (plays.reduce((s, p) => s + n(p.gnls), 0) / plays.length).toFixed(1) : '0.0';
@@ -11,99 +10,36 @@ const isRun = (p: Play) => p.type.toLowerCase().includes('run');
 const isPass = (p: Play) => p.type.toLowerCase().includes('pass');
 const clean = (v: string) => v && v !== '—' ? v : 'Unclassified';
 
-function Card({ children, title, detail, className = '' }: { children: React.ReactNode; title?: string; detail?: string; className?: string }) {
-  return <section className={`panel ${className}`}>
+function Card({ children, title, detail, className = '', style }: { children: ReactNode; title?: string; detail?: string; className?: string; style?: CSSProperties }) {
+  return <section className={`panel ${className}`} style={style}>
     {title && <div style={{ padding: '21px 21px 0' }}><div className="section-title"><div><h3>{title}</h3>{detail && <span>{detail}</span>}</div></div></div>}
     <div style={{ padding: title ? '14px 21px 21px' : 21 }}>{children}</div>
   </section>;
 }
-
 function Bar({ label, value, total, green = false }: { label: string; value: number; total: number; green?: boolean }) {
   const width = pct(value, total);
   return <div className="trend-row"><div className="trend-head"><span>{label}</span><strong>{value} <small>({width}%)</small></strong></div><div className={`progress ${green ? 'green' : ''}`}><span style={{ width: `${width}%` }} /></div></div>;
 }
 
 export default function ScoutDashboard({ data }: { data: { scouting: Play[] } }) {
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState('All');
-  const [formationFilter, setFormationFilter] = useState('All');
+  const [search, setSearch] = useState(''); const [typeFilter, setTypeFilter] = useState('All'); const [formationFilter, setFormationFilter] = useState('All');
   const source = data.scouting ?? [];
   const formations = useMemo(() => Array.from(new Set(source.map(p => clean(p.form)))).sort((a,b) => a.localeCompare(b)), [source]);
-  const filtered = useMemo(() => source.filter(p => {
-    const text = Object.values(p).join(' ').toLowerCase();
-    return (typeFilter === 'All' || (typeFilter === 'Run' ? isRun(p) : isPass(p))) &&
-      (formationFilter === 'All' || clean(p.form) === formationFilter) && text.includes(search.toLowerCase());
-  }), [source, search, typeFilter, formationFilter]);
-
-  const runs = filtered.filter(isRun); const passes = filtered.filter(isPass);
-  const explosive = filtered.filter(p => n(p.gnls) >= 12);
-  const success = filtered.filter(p => n(p.gnls) >= Math.max(3, n(p.dist)));
-  const motions = filtered.filter(p => clean(p.motion).toLowerCase() !== 'none' && clean(p.motion).toLowerCase() !== 'unclassified');
-
-  const formationStats = useMemo(() => formations.map(form => {
-    const ps = filtered.filter(p => clean(p.form) === form); const r = ps.filter(isRun); const calls = Array.from(new Set(ps.map(p => clean(p.offPlay)))).map(call => ({ call, count: ps.filter(p => clean(p.offPlay) === call).length })).sort((a,b) => b.count-a.count);
-    return { form, total: ps.length, runs: r.length, passes: ps.length-r.length, avg: avg(ps), topCall: calls[0]?.call ?? '—', topCallCount: calls[0]?.count ?? 0 };
-  }).filter(x => x.total).sort((a,b) => b.total-a.total), [formations, filtered]);
-
-  const downBuckets = [
-    ['1st & 10+', (p: Play) => p.dn === '1' && n(p.dist) >= 10],
-    ['1st & Short', (p: Play) => p.dn === '1' && n(p.dist) < 10],
-    ['2nd & Long', (p: Play) => p.dn === '2' && n(p.dist) >= 7],
-    ['2nd & Medium', (p: Play) => p.dn === '2' && n(p.dist) >= 4 && n(p.dist) < 7],
-    ['2nd & Short', (p: Play) => p.dn === '2' && n(p.dist) < 4],
-    ['3rd & Long', (p: Play) => p.dn === '3' && n(p.dist) >= 7],
-    ['3rd & Medium', (p: Play) => p.dn === '3' && n(p.dist) >= 4 && n(p.dist) < 7],
-    ['3rd & Short', (p: Play) => p.dn === '3' && n(p.dist) < 4],
-  ] as const;
-  const downStats = downBuckets.map(([label, fn]) => { const ps = filtered.filter(fn); const r = ps.filter(isRun).length; return { label, total: ps.length, runPct: pct(r, ps.length), avg: avg(ps) }; }).filter(x => x.total);
-
-  const zoneStats = [
-    ['Backed Up', (p: Play) => Math.abs(n(p.yardLn)) <= 20],
-    ['Own Territory', (p: Play) => Math.abs(n(p.yardLn)) > 20 && Math.abs(n(p.yardLn)) < 50],
-    ['Midfield', (p: Play) => Math.abs(n(p.yardLn)) >= 50 && Math.abs(n(p.yardLn)) < 60],
-    ['Red Zone', (p: Play) => p.yardLn.toLowerCase().includes('opp') && n(p.yardLn) <= 20],
-    ['Goal Line', (p: Play) => p.yardLn.toLowerCase().includes('opp') && n(p.yardLn) <= 5],
-  ].map(([label, fn]) => { const ps = filtered.filter(fn); return { label, total: ps.length, runPct: pct(ps.filter(isRun).length, ps.length), avg: avg(ps) }; }).filter(x => x.total);
-
-  const topCalls = Array.from(new Set(filtered.map(p => clean(p.offPlay)))).map(call => ({ call, total: filtered.filter(p => clean(p.offPlay) === call).length, runs: filtered.filter(p => clean(p.offPlay) === call && isRun(p)).length, avg: avg(filtered.filter(p => clean(p.offPlay) === call)) })).sort((a,b) => b.total-a.total).slice(0, 8);
-  const alerts: string[] = [];
-  if (filtered.length && pct(runs.length, filtered.length) >= 65) alerts.push(`Overall run tendency is ${pct(runs.length, filtered.length)}%.`);
-  if (downStats.find(x => x.label === '3rd & Long' && x.runPct >= 65)) alerts.push('3rd & Long shows an unusually strong run tendency.');
-  const heavy = formationStats.find(x => x.total >= 3 && pct(x.runs, x.total) >= 75); if (heavy) alerts.push(`${heavy.form} is a heavy run formation (${pct(heavy.runs, heavy.total)}%).`);
-  if (motions.length >= 3) alerts.push(`${pct(motions.filter(isRun).length, motions.length)}% run when motion is used.`);
-  if (!alerts.length && filtered.length) alerts.push('No high-confidence automatic tells yet — keep charting.');
-
+  const filtered = useMemo(() => source.filter(p => { const text = Object.values(p).join(' ').toLowerCase(); return (typeFilter === 'All' || (typeFilter === 'Run' ? isRun(p) : isPass(p))) && (formationFilter === 'All' || clean(p.form) === formationFilter) && text.includes(search.toLowerCase()); }), [source, search, typeFilter, formationFilter]);
+  const runs = filtered.filter(isRun); const passes = filtered.filter(isPass); const explosive = filtered.filter(p => n(p.gnls) >= 12); const success = filtered.filter(p => n(p.gnls) >= Math.max(3, n(p.dist))); const motions = filtered.filter(p => clean(p.motion).toLowerCase() !== 'none' && clean(p.motion).toLowerCase() !== 'unclassified');
+  const formationStats = useMemo(() => formations.map(form => { const ps = filtered.filter(p => clean(p.form) === form); const r = ps.filter(isRun); const calls = Array.from(new Set(ps.map(p => clean(p.offPlay)))).map(call => ({ call, count: ps.filter(p => clean(p.offPlay) === call).length })).sort((a,b) => b.count-a.count); return { form, total: ps.length, runs: r.length, passes: ps.length-r.length, avg: avg(ps), topCall: calls[0]?.call ?? '—', topCallCount: calls[0]?.count ?? 0 }; }).filter(x => x.total).sort((a,b) => b.total-a.total), [formations, filtered]);
+  const downBuckets = [['1st & 10+', (p: Play) => p.dn === '1' && n(p.dist) >= 10], ['1st & Short', (p: Play) => p.dn === '1' && n(p.dist) < 10], ['2nd & Long', (p: Play) => p.dn === '2' && n(p.dist) >= 7], ['2nd & Medium', (p: Play) => p.dn === '2' && n(p.dist) >= 4 && n(p.dist) < 7], ['2nd & Short', (p: Play) => p.dn === '2' && n(p.dist) < 4], ['3rd & Long', (p: Play) => p.dn === '3' && n(p.dist) >= 7], ['3rd & Medium', (p: Play) => p.dn === '3' && n(p.dist) >= 4 && n(p.dist) < 7], ['3rd & Short', (p: Play) => p.dn === '3' && n(p.dist) < 4]] as const;
+  const downStats = downBuckets.map(([label, fn]) => { const ps = filtered.filter(fn); return { label, total: ps.length, runPct: pct(ps.filter(isRun).length, ps.length), avg: avg(ps) }; }).filter(x => x.total);
+  const zoneStats = [['Backed Up', (p: Play) => Math.abs(n(p.yardLn)) <= 20], ['Own Territory', (p: Play) => Math.abs(n(p.yardLn)) > 20 && Math.abs(n(p.yardLn)) < 50], ['Midfield', (p: Play) => Math.abs(n(p.yardLn)) >= 50 && Math.abs(n(p.yardLn)) < 60], ['Red Zone', (p: Play) => p.yardLn.toLowerCase().includes('opp') && n(p.yardLn) <= 20], ['Goal Line', (p: Play) => p.yardLn.toLowerCase().includes('opp') && n(p.yardLn) <= 5]].map(([label, fn]) => { const ps = filtered.filter(fn); return { label, total: ps.length, runPct: pct(ps.filter(isRun).length, ps.length), avg: avg(ps) }; }).filter(x => x.total);
+  const topCalls = Array.from(new Set(filtered.map(p => clean(p.offPlay)))).map(call => { const ps = filtered.filter(p => clean(p.offPlay) === call); return { call, total: ps.length, runs: ps.filter(isRun).length, avg: avg(ps) }; }).sort((a,b) => b.total-a.total).slice(0,8);
+  const alerts: string[] = []; if (filtered.length && pct(runs.length, filtered.length) >= 65) alerts.push(`Overall run tendency is ${pct(runs.length, filtered.length)}%.`); if (downStats.some(x => x.label === '3rd & Long' && x.runPct >= 65)) alerts.push('3rd & Long shows an unusually strong run tendency.'); const heavy = formationStats.find(x => x.total >= 3 && pct(x.runs, x.total) >= 75); if (heavy) alerts.push(`${heavy.form} is a heavy run formation (${pct(heavy.runs, heavy.total)}%).`); if (motions.length >= 3) alerts.push(`${pct(motions.filter(isRun).length, motions.length)}% run when motion is used.`); if (!alerts.length && filtered.length) alerts.push('No high-confidence automatic tells yet — keep charting.');
   return <div className="content">
     <div className="page-head"><div><div className="eyebrow">SCOUTING · FULL TENDENCY DASHBOARD</div><h1>Know the tell before the snap.</h1><p>Formation, down & distance, field position and play-call tendencies from the selected Scout File.</p></div></div>
-    <div className="filters" style={{ marginBottom: 14 }}>
-      <div style={{ position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 11, top: 10, color: '#77758a' }} /><input className="input" style={{ paddingLeft: 33, width: 230 }} placeholder="Search scout data…" value={search} onChange={e => setSearch(e.target.value)} /></div>
-      <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}><option>All</option><option>Run</option><option>Pass</option></select>
-      <select value={formationFilter} onChange={e => setFormationFilter(e.target.value)}><option>All</option>{formations.map(f => <option key={f}>{f}</option>)}</select>
-      <span className="eyebrow" style={{ marginLeft: 'auto' }}>{filtered.length} / {source.length} snaps</span>
-    </div>
-
-    <div className="grid split-grid">
-      <Card title="Scout snapshot" detail="Selected Scout File"><div className="kpi-grid">
-        {[['Snaps', filtered.length], ['Run %', `${pct(runs.length, filtered.length)}%`], ['Pass %', `${pct(passes.length, filtered.length)}%`], ['Avg Yards', avg(filtered)], ['Success %', `${pct(success.length, filtered.length)}%`], ['Explosive', explosive.length]].map(([label,value]) => <div className="kpi" key={String(label)}><span>{label}</span><strong>{value}</strong></div>)}
-      </div></Card>
-      <Card title="Run / pass profile" detail="What they want to do"><Bar label="Run calls" value={runs.length} total={filtered.length} green /><Bar label="Pass calls" value={passes.length} total={filtered.length} /></Card>
-    </div>
-
-    <div className="grid split-grid" style={{ marginTop: 14 }}>
-      <Card title="Formation report" detail="Volume · tendency · favorite call"><div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>Run</th><th>Pass</th><th>Avg</th><th>Top call</th></tr></thead><tbody>{formationStats.slice(0,8).map(x => <tr key={x.form}><td><strong>{x.form}</strong></td><td>{x.total}</td><td>{pct(x.runs,x.total)}%</td><td>{pct(x.passes,x.total)}%</td><td>{x.avg}</td><td>{x.topCall} <small>({x.topCallCount})</small></td></tr>)}</tbody></table></div></Card>
-      <Card title="Down & distance" detail="Situational run/pass tendencies">{downStats.length ? downStats.map(x => <div className="trend-row" key={x.label}><div className="trend-head"><span>{x.label}</span><span>{x.runPct}% run · {x.avg} avg</span></div><div className="progress green"><span style={{ width: `${x.runPct}%` }} /></div></div>) : <div className="empty"><Target size={26}/><h3>No down/distance data</h3></div>}</Card>
-    </div>
-
-    <div className="grid split-grid" style={{ marginTop: 14 }}>
-      <Card title="Field position" detail="Where the offense changes"><div className="table-wrap"><table className="data-table"><thead><tr><th>Zone</th><th>Snaps</th><th>Run</th><th>Avg</th></tr></thead><tbody>{zoneStats.map(x => <tr key={x.label}><td><strong>{x.label}</strong></td><td>{x.total}</td><td>{x.runPct}%</td><td>{x.avg}</td></tr>)}</tbody></table></div></Card>
-      <Card title="Top play calls" detail="Highest-volume calls"><div className="feed">{topCalls.map((x,i) => <div className="feed-row" key={x.call}><span className="feed-num">{String(i+1).padStart(2,'0')}</span><div className="feed-main"><strong>{x.call}</strong><span>{x.total} snaps · {pct(x.runs,x.total)}% run · {x.avg} avg yards</span></div></div>)}</div></Card>
-    </div>
-
-    <div className="grid split-grid" style={{ marginTop: 14 }}>
-      <Card title="Automatic tendency tells" detail="Signals worth carrying into the meeting"><div className="feed">{alerts.map((a,i) => <div className="feed-row" key={a}><span className="feed-num">{String(i+1).padStart(2,'0')}</span><div className="feed-main"><strong><TrendingUp size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />{a}</strong></div></div>)}</div></Card>
-      <Card title="Coverage of the chart" detail="How complete is the scouting data"><Bar label="Formation tagged" value={filtered.filter(p=>clean(p.form)!=='Unclassified').length} total={filtered.length} green /><Bar label="Play call tagged" value={filtered.filter(p=>clean(p.offPlay)!=='Unclassified').length} total={filtered.length} green /><Bar label="Motion tagged" value={motions.length} total={filtered.length} /><div className="callout"><Activity />The dashboard updates from the selected Scout File only. Live Game data is intentionally excluded.</div></Card>
-    </div>
-
-    <Card title="Scouting play ledger" detail="Filtered snap-by-snap detail" className="fade-in" style={{ marginTop: 14 } as any}><div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Situation</th><th>Type</th><th>Formation</th><th>Call</th><th>Backfield</th><th>Motion</th><th>Gain</th><th>Defense</th></tr></thead><tbody>{filtered.slice(0,100).map((p,i)=><tr key={`${p.playNo}-${i}`}><td><strong>#{p.playNo}</strong></td><td>{p.dn}&{p.dist} · {p.hash}</td><td><span className={`tag ${isRun(p)?'green':''}`}>{p.type}</span></td><td>{clean(p.form)}</td><td>{clean(p.offPlay)}</td><td>{clean(p.backfield)}</td><td>{clean(p.motion)}</td><td>{p.gnls}</td><td>{clean(p.defense)}</td></tr>)}</tbody></table></div>{filtered.length>100 && <div className="eyebrow" style={{paddingTop:12}}>Showing first 100 rows. Use filters/search to narrow the ledger.</div>}</Card>
+    <div className="filters" style={{ marginBottom: 14 }}><div style={{ position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 11, top: 10, color: '#77758a' }} /><input className="input" style={{ paddingLeft: 33, width: 230 }} placeholder="Search scout data…" value={search} onChange={e => setSearch(e.target.value)} /></div><select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}><option>All</option><option>Run</option><option>Pass</option></select><select value={formationFilter} onChange={e => setFormationFilter(e.target.value)}><option>All</option>{formations.map(f => <option key={f}>{f}</option>)}</select><span className="eyebrow" style={{ marginLeft: 'auto' }}>{filtered.length} / {source.length} snaps</span></div>
+    <div className="grid split-grid"><Card title="Scout snapshot" detail="Selected Scout File"><div className="kpi-grid">{[['Snaps', filtered.length], ['Run %', `${pct(runs.length, filtered.length)}%`], ['Pass %', `${pct(passes.length, filtered.length)}%`], ['Avg Yards', avg(filtered)], ['Success %', `${pct(success.length, filtered.length)}%`], ['Explosive', explosive.length]].map(([label,value]) => <div className="kpi" key={String(label)}><span>{label}</span><strong>{value}</strong></div>)}</div></Card><Card title="Run / pass profile" detail="What they want to do"><Bar label="Run calls" value={runs.length} total={filtered.length} green /><Bar label="Pass calls" value={passes.length} total={filtered.length} /></Card></div>
+    <div className="grid split-grid" style={{ marginTop: 14 }}><Card title="Formation report" detail="Volume · tendency · favorite call"><div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>Run</th><th>Pass</th><th>Avg</th><th>Top call</th></tr></thead><tbody>{formationStats.slice(0,8).map(x => <tr key={x.form}><td><strong>{x.form}</strong></td><td>{x.total}</td><td>{pct(x.runs,x.total)}%</td><td>{pct(x.passes,x.total)}%</td><td>{x.avg}</td><td>{x.topCall} <small>({x.topCallCount})</small></td></tr>)}</tbody></table></div></Card><Card title="Down & distance" detail="Situational run/pass tendencies">{downStats.length ? downStats.map(x => <div className="trend-row" key={x.label}><div className="trend-head"><span>{x.label}</span><span>{x.runPct}% run · {x.avg} avg</span></div><div className="progress green"><span style={{ width: `${x.runPct}%` }} /></div></div>) : <div className="empty"><Target size={26}/><h3>No down/distance data</h3></div>}</Card></div>
+    <div className="grid split-grid" style={{ marginTop: 14 }}><Card title="Field position" detail="Where the offense changes"><div className="table-wrap"><table className="data-table"><thead><tr><th>Zone</th><th>Snaps</th><th>Run</th><th>Avg</th></tr></thead><tbody>{zoneStats.map(x => <tr key={x.label}><td><strong>{x.label}</strong></td><td>{x.total}</td><td>{x.runPct}%</td><td>{x.avg}</td></tr>)}</tbody></table></div></Card><Card title="Top play calls" detail="Highest-volume calls"><div className="feed">{topCalls.map((x,i) => <div className="feed-row" key={x.call}><span className="feed-num">{String(i+1).padStart(2,'0')}</span><div className="feed-main"><strong>{x.call}</strong><span>{x.total} snaps · {pct(x.runs,x.total)}% run · {x.avg} avg yards</span></div></div>)}</div></Card></div>
+    <div className="grid split-grid" style={{ marginTop: 14 }}><Card title="Automatic tendency tells" detail="Signals worth carrying into the meeting"><div className="feed">{alerts.map((a,i) => <div className="feed-row" key={a}><span className="feed-num">{String(i+1).padStart(2,'0')}</span><div className="feed-main"><strong><TrendingUp size={14} style={{ verticalAlign: 'middle', marginRight: 6 }} />{a}</strong></div></div>)}</div></Card><Card title="Coverage of the chart" detail="How complete is the scouting data"><Bar label="Formation tagged" value={filtered.filter(p=>clean(p.form)!=='Unclassified').length} total={filtered.length} green /><Bar label="Play call tagged" value={filtered.filter(p=>clean(p.offPlay)!=='Unclassified').length} total={filtered.length} green /><Bar label="Motion tagged" value={motions.length} total={filtered.length} /><div className="callout"><Activity />The dashboard updates from the selected Scout File only. Live Game data is intentionally excluded.</div></Card></div>
+    <Card title="Scouting play ledger" detail="Filtered snap-by-snap detail" className="fade-in" style={{ marginTop: 14 }}><div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Situation</th><th>Type</th><th>Formation</th><th>Call</th><th>Backfield</th><th>Motion</th><th>Gain</th><th>Defense</th></tr></thead><tbody>{filtered.slice(0,100).map((p,i)=><tr key={`${p.playNo}-${i}`}><td><strong>#{p.playNo}</strong></td><td>{p.dn}&{p.dist} · {p.hash}</td><td><span className={`tag ${isRun(p)?'green':''}`}>{p.type}</span></td><td>{clean(p.form)}</td><td>{clean(p.offPlay)}</td><td>{clean(p.backfield)}</td><td>{clean(p.motion)}</td><td>{p.gnls}</td><td>{clean(p.defense)}</td></tr>)}</tbody></table></div>{filtered.length>100 && <div className="eyebrow" style={{paddingTop:12}}>Showing first 100 rows. Use filters/search to narrow the ledger.</div>}</Card>
   </div>;
 }
