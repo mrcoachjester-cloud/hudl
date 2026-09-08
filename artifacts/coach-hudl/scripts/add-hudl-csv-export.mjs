@@ -63,18 +63,15 @@ function HudlCsvExportBar() {
 `;
 
 if (!source.includes('function HudlCsvExportBar()')) {
-  const appMarker = /\n(?:export )?function App\s*\(/;
-  if (!appMarker.test(source)) throw new Error('Could not find App component marker while installing Hudl CSV export.');
-  source = source.replace(appMarker, `\n${component}\nfunction App(`);
+  const routerMarker = /\nfunction Router\s*\(/;
+  if (!routerMarker.test(source)) throw new Error('Could not find Router component marker while installing Hudl CSV export.');
+  source = source.replace(routerMarker, `\n${component}\nfunction Router(`);
 }
 
 if (!source.includes('<HudlCsvExportBar />')) {
-  const appStart = source.search(/(?:export )?function App\s*\(/);
-  if (appStart < 0) throw new Error('Could not find App component while installing Hudl CSV export.');
-  const returnIndex = source.indexOf('return (', appStart);
-  if (returnIndex < 0) throw new Error('Could not find App return while installing Hudl CSV export.');
-  const insertAt = returnIndex + 'return ('.length;
-  source = source.slice(0, insertAt) + '\n      <HudlCsvExportBar />' + source.slice(insertAt);
+  const appShellMarker = '<AppShell data={data} setData={setData}>';
+  if (!source.includes(appShellMarker)) throw new Error('Could not find AppShell mount while installing Hudl CSV export.');
+  source = source.replace(appShellMarker, `${appShellMarker}\n      <HudlCsvExportBar />`);
 }
 
 fs.writeFileSync(appPath, source);
