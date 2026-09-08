@@ -4,8 +4,9 @@ const path = new URL('../src/App.tsx', import.meta.url);
 let source = fs.readFileSync(path, 'utf8');
 
 const oldImport = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
-const newImport = "import { appendScoutingPlays, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
+const newImport = "import { appendScoutingPlays, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';\nimport { parseHudlCsv } from './lib/hudlCsv';";
 if (source.includes(oldImport)) source = source.replace(oldImport, newImport);
+source = source.replace('const parsed = parseCsv(String(reader.result ?? \'\'));', 'const parsed = parseHudlCsv(String(reader.result ?? \'\'));');
 
 const oldTeamEffect = `  useEffect(() => {
     let cancelled = false;
@@ -118,7 +119,7 @@ const replacement = String.raw`function UploadPage({ data, setData }: { data: Da
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        const parsed = parseCsv(String(reader.result ?? ''));
+        const parsed = parseHudlCsv(String(reader.result ?? ''));
         setPreview(parsed.slice(0, 12));
         if (!parsed.length) { toast.notify('No readable play rows found in that file'); return; }
         const seasons = await getSeasons();
