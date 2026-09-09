@@ -3,10 +3,9 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vite';
 import runtimeErrorOverlay from '@replit/vite-plugin-runtime-error-modal';
-import { liveGameTransform } from './scripts/live-game-transform.mjs';
 
 export default defineConfig(async ({ command }) => {
-  const isServe = command === 'serve'; // true for `vite dev` / `vite preview`, false for `vite build`
+  const isServe = command === 'serve';
 
   let port: number | undefined;
   if (isServe) {
@@ -27,7 +26,6 @@ export default defineConfig(async ({ command }) => {
   return {
     base: basePath,
     plugins: [
-      liveGameTransform(),
       react(),
       tailwindcss(),
       runtimeErrorOverlay(),
