@@ -3,19 +3,14 @@ import path from 'node:path';
 
 const root = path.resolve(process.cwd());
 const appPath = path.join(root, 'src', 'App.tsx');
-const dataPath = path.join(root, 'src', 'lib', 'footballData.ts');
-if (!fs.existsSync(appPath) || !fs.existsSync(dataPath)) process.exit(0);
+const shimPath = path.join(root, 'src', 'lib', 'createGame.ts');
+if (!fs.existsSync(appPath) || !fs.existsSync(shimPath)) process.exit(0);
 
 let appSource = fs.readFileSync(appPath, 'utf8');
-const dataSource = fs.readFileSync(dataPath, 'utf8');
 
-// The Schedule page calls createGame through the footballData module. Keep
-// both sides of that contract explicit so a stale/generated bundle cannot
-// ship an import for a missing export.
-if (!/export\s+async\s+function\s+createGame\s*\(/.test(dataSource)) {
-  throw new Error('footballData.ts must export async function createGame before building the app');
-}
-
+// Keep Schedule's createGame dependency isolated from the large footballData
+// module. This gives the browser a concrete module export instead of relying
+// on the generated namespace shape that previously produced F.createGame.
 const importRegex = /import\s*\{([\s\S]*?)\}\s*from\s*['\"]\.\/lib\/footballData['\"];?/m;
 const match = appSource.match(importRegex);
 if (!match) throw new Error('Could not find footballData import in App.tsx');
@@ -23,20 +18,22 @@ if (!match) throw new Error('Could not find footballData import in App.tsx');
 const names = match[1]
   .split(',')
   .map(item => item.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .filter(name => name !== 'createGame');
 
-if (!names.includes('createGame')) {
-  names.unshift('createGame');
-  appSource = appSource.replace(importRegex, `import { ${names.join(', ')} } from './lib/footballData';`);
-  fs.writeFileSync(appPath, appSource);
-  console.log('Ensured createGame is imported into App.tsx');
-} else {
-  console.log('createGame import already present');
+appSource = appSource.replace(importRegex, `import { ${names.join(', ')} } from './lib/footballData';`);
+
+const shimImport = "import { createGame } from './lib/createGame';";
+if (!appSource.includes(shimImport)) {
+  const insertionPoint = appSource.indexOf('\n');
+  appSource = `${appSource.slice(0, insertionPoint + 1)}${shimImport}\n${appSource.slice(insertionPoint + 1)}`;
 }
 
-// Always fail fast if the generated source still does not contain the named
-// import. This prevents Vite from producing a runtime F.createGame error.
-const finalImport = appSource.match(importRegex)?.[1] ?? '';
-if (!finalImport.split(',').map(item => item.trim()).includes('createGame')) {
-  throw new Error('createGame import was not present after the schedule import repair');
+fs.writeFileSync(appPath, appSource);
+console.log('Schedule createGame now uses the dedicated createGame module');
+
+const finalShimImport = appSource.includes(shimImport);
+if (!finalShimImport) throw new Error('createGame shim import was not present after schedule import repair');
+if (appSource.match(importRegex)?.[1].split(',').map(item => item.trim()).includes('createGame')) {
+  throw new Error('createGame must not remain imported from footballData.ts');
 }
