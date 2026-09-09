@@ -71,12 +71,16 @@ source = source.replace(
   "  const [showArchived, setShowArchived] = useState(false);\n  const seasons ="
 );
 
-const localAddGame = `  const addGame = () => {\n    if (!draft.season.trim() || !draft.opponent.trim()) return;\n    const id = \`game-\${Date.now()}-\${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-')}\`;\n    const game: ScheduleGame = { ...draft, id, archived: false };\n    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };`;
 const persistedAddGame = `  const addGame = async () => {\n    if (!draft.season.trim() || !draft.opponent.trim()) return;\n    const seasonRecord = (await getSeasons()).find(item => String(item.season_year) === draft.season.trim());\n    if (isSupabaseConfigured) {\n      if (!seasonRecord) {\n        toast.notify(\`Season \${draft.season.trim()} was not found in Supabase.\`);\n        return;\n      }\n      try {\n        const created = await createGame({\n          seasonId: seasonRecord.id,\n          opponent: draft.opponent.trim(),\n          gameDate: draft.date || undefined,\n          location: draft.location,\n          result: draft.result,\n        });\n        if (!created) throw new Error('Supabase did not return the created game.');\n        const game: ScheduleGame = { id: created.id, season: String(seasonRecord.season_year), opponent: created.opponent, date: created.game_date ?? '', location: created.location ?? '—', result: created.game_result ?? '—', archived: Boolean(created.archived) };\n        setData({ ...data, schedule: [game, ...schedule], activeGameId: game.id });\n        setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n        toast.notify(\`Saved \${game.opponent} to the \${game.season} schedule.\`);\n      } catch (error) {\n        console.error('Could not save schedule game:', error);\n        toast.notify('Could not save that game to Supabase.');\n      }\n      return;\n    }\n    const id = \`game-\${Date.now()}-\${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-')}\`;\n    const game: ScheduleGame = { ...draft, id, archived: false };\n    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };`;
-if (source.includes(localAddGame)) {
-  source = source.replace(localAddGame, persistedAddGame);
-} else if (!source.includes("const seasonRecord = (await getSeasons()).find")) {
-  throw new Error('Could not find SchedulePage addGame implementation');
+
+// The earlier prebuild scripts can legitimately rewrite SchedulePage before this
+// script runs. Match the function by its boundary instead of depending on one
+// exact historical implementation of addGame.
+const addGameRegex = /  const addGame = [\s\S]*?\n  const toggleArchive =/;
+if (addGameRegex.test(source)) {
+  source = source.replace(addGameRegex, persistedAddGame + '\n  const toggleArchive =');
+} else {
+  throw new Error('Could not find SchedulePage addGame function boundary');
 }
 
 const addGameEndMarker = "  };\n  const toggleArchive =";
