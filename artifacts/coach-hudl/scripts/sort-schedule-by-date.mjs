@@ -7,11 +7,20 @@ if (!fs.existsSync(appPath)) process.exit(0);
 
 let source = fs.readFileSync(appPath, 'utf8');
 
-// The Coach Connect prebuild branding script can add upcomingGames immediately
-// after visibleGames. Match only the declaration itself so this script remains
-// stable when earlier build-time patches change the surrounding SchedulePage.
-const visibleGamesRegex = /  const visibleGames = schedule\.filter\(game => showArchived \|\| !game\.archived\);/;
-const replacement = `  const visibleGames = schedule\n    .filter(game => game.season === activeGame?.season && (showArchived || !game.archived))\n    .slice()\n    .sort((a, b) => {\n      if (!a.date && !b.date) return 0;\n      if (!a.date) return 1;\n      if (!b.date) return -1;\n      return a.date.localeCompare(b.date);\n    });`;
+// This script runs after several other Schedule patches. Do not depend on the
+// exact expression those patches leave behind. Replace the visibleGames
+// declaration itself, from its declaration through its terminating semicolon.
+const visibleGamesRegex = /  const visibleGames =[^;]*;\n/;
+const replacement = `  const visibleGames = schedule
+    .filter(game => game.season === activeGame?.season && (showArchived || !game.archived))
+    .slice()
+    .sort((a, b) => {
+      if (!a.date && !b.date) return 0;
+      if (!a.date) return 1;
+      if (!b.date) return -1;
+      return a.date.localeCompare(b.date);
+    });
+`;
 
 if (source.includes("return a.date.localeCompare(b.date);")) {
   console.log('Schedule date sorting already installed.');
