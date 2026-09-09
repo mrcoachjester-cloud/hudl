@@ -10,7 +10,7 @@ export type LivePlay = {
   id: string; game_id: string; play_number: number; odk: string | null; down: number | null; dist: number | null; hash: string | null; gnls: number | null; yard_line: number | null; play_type: string | null; result: string | null; off_formation: string | null; personnel: string | null; scheme: string | null; motion: string | null; off_play: string | null; ball_carrier: string | null; defense: string | null; play_dir: string | null; backfield: string | null; created_at: string; updated_at?: string; updated_by?: string | null;
 };
 export type LivePlayDraft = {
-  game_id: string; play_number: number; odk: string | null; down: number | null; dist: number | null; hash: string | null; yard_line: number | null; play_type: string | null; result: string | null; off_formation: string | null; off_play: string | null; ball_carrier: string | null; defense: string | null; gnls: number | null; updated_at: string; updated_by: string | null;
+  game_id: string; play_number: number; odk: string | null; down: number | null; dist: number | null; hash: string | null; yard_line: number | null; starting_yard_line: number | null; play_type: string | null; result: string | null; off_formation: string | null; off_play: string | null; ball_carrier: string | null; defense: string | null; gnls: number | null; updated_at: string; updated_by: string | null;
 };
 export type ScoutingSession = {
   id: string; season_id: string; game_id: string | null; opponent: string; week: number | null; description: string | null; archived: boolean; uploaded_at: string | null; created_at: string;
@@ -40,7 +40,7 @@ export async function updateLivePlay(playId: string, field: string, value: strin
 
 const draftNumber = (value: unknown, fallback: number | null = null) => { const n = Number(value); return Number.isFinite(n) && n !== 0 ? n : fallback; };
 export async function getLivePlayDraft(gameId: string): Promise<LivePlayDraft | null> { if (!supabase || !gameId) return null; const { data, error } = await supabase.from('live_play_drafts').select('*').eq('game_id', gameId).maybeSingle(); if (error) throw error; return data ?? null; }
-export async function upsertLivePlayDraft(gameId: string, play: Partial<StandardPlay>, updatedBy?: string): Promise<LivePlayDraft | null> {
+export async function upsertLivePlayDraft(gameId: string, play: Partial<StandardPlay> & { startingYardLine?: string }, updatedBy?: string): Promise<LivePlayDraft | null> {
   if (!supabase || !gameId) return null;
   const row: Record<string, unknown> = { game_id: gameId, play_number: draftNumber(play.playNo, 1), updated_by: updatedBy ?? null };
   const map: Record<string, string> = { odk:'odk', dn:'down', dist:'dist', hash:'hash', yardLn:'yard_line', type:'play_type', result:'result', form:'off_formation', offPlay:'off_play', carrier:'ball_carrier', defense:'defense', gnls:'gnls' };
@@ -51,6 +51,7 @@ export async function upsertLivePlayDraft(gameId: string, play: Partial<Standard
       else row[column] = value === '' || value === '—' ? null : value;
     }
   }
+  if (Object.prototype.hasOwnProperty.call(play, 'startingYardLine')) row.starting_yard_line = draftNumber(play.startingYardLine);
   const { data, error } = await supabase.from('live_play_drafts').upsert(row, { onConflict: 'game_id' }).select('*').single();
   if (error) throw error;
   return data;
