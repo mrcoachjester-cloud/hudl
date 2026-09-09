@@ -13,14 +13,17 @@ function replaceOnce(from, to, label) {
   source = source.replace(from, to);
 }
 
-replaceOnce(
-  "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';",
-  "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';\nimport { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';",
-  'team data import'
-);
+// The app now imports createGame from footballData. Match the whole import line
+// instead of depending on an older exact import string.
+const footballDataImport = /import \{[^\n]*\} from '\.\/lib\/footballData';/;
+const teamDataImport = "import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';";
+if (!source.includes(teamDataImport)) {
+  if (!footballDataImport.test(source)) throw new Error('Team context patch could not find footballData import');
+  source = source.replace(footballDataImport, match => `${match}\n${teamDataImport}`);
+}
 
 replaceOnce(
-  "  activeGameId: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }>;",
+  "  activeGameId: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }> ;",
   "  activeGameId: string;\n  activeTeam?: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }> ;",
   'Dataset team field'
 );
@@ -55,7 +58,6 @@ replaceOnce(
   'top Team selector'
 );
 
-// Rebrand visible product text and profile initials. Internal storage/database keys are left alone.
 source = source.replaceAll('Coach Hudl', 'Coach Connect');
 source = source.replace(/(<div className=\"avatar\"[^>]*>\s*)JR(\s*<\/div>)/, '$1WHS$2');
 indexSource = indexSource.replaceAll('Coach Hudl', 'Coach Connect');
