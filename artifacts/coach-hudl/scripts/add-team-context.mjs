@@ -13,8 +13,6 @@ function replaceOnce(from, to, label) {
   source = source.replace(from, to);
 }
 
-// The app now imports createGame from footballData. Match the whole import line
-// instead of depending on an older exact import string.
 const footballDataImport = /import \{[^\n]*\} from '\.\/lib\/footballData';/;
 const teamDataImport = "import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';";
 if (!source.includes(teamDataImport)) {
@@ -22,11 +20,12 @@ if (!source.includes(teamDataImport)) {
   source = source.replace(footballDataImport, match => `${match}\n${teamDataImport}`);
 }
 
-replaceOnce(
-  "  activeGameId: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }> ;",
-  "  activeGameId: string;\n  activeTeam?: string;\n  gameData?: Record<string, { scouting: Play[]; live: Play[] }> ;",
-  'Dataset team field'
-);
+// Support both the older formatted Dataset field and the current formatting.
+const datasetField = /  activeGameId: string;\n  (?:activeTeam\?: string;\n  )?gameData\?: Record<string, \{ scouting: Play\[\]; live: Play\[\] \}>;|  activeGameId: string;\n  (?:activeTeam\?: string;\n  )?gameData\?: Record<string, \{ scouting: Play\[\]; live: Play\[\] \}> ;/;
+if (!source.includes('  activeTeam?: string;')) {
+  if (!datasetField.test(source)) throw new Error('Team context patch could not find Dataset team field');
+  source = source.replace(datasetField, match => match.replace('  gameData?', '  activeTeam?: string;\n  gameData?'));
+}
 
 replaceOnce(
   "    return {\n      scouting: currentPlays.scouting,\n      live: currentPlays.live,\n      schedule,\n      activeGameId,\n      gameData:",
