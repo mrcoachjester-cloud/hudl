@@ -66,5 +66,53 @@ if (source.includes('<CalendarClock') && !source.includes('CalendarClock,')) {
   source = source.replace('  BarChart3,\n', '  BarChart3,\n  CalendarClock,\n');
 }
 
+// Schedule must be durable when Supabase is connected. Previously Add game only
+// changed React/local state, while the app hydrates the schedule from Supabase on
+// load. That made a newly-added opponent disappear after refresh/redeploy. Persist
+// create/archive operations to the same games table used by the hydration query.
+const footballDataImport = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
+const footballDataImportWithArchive = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, setGameArchived, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
+if (source.includes(footballDataImport) && !source.includes('setGameArchived')) {
+  source = source.replace(footballDataImport, footballDataImportWithArchive);
+}
+
+const scheduleStateMarker = "function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {\n  const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });";
+const scheduleStateReplacement = "function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {\n  const schedule = data.schedule;\n  const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];\n  const [draft, setDraft] = useState({ season: activeGame?.season ?? String(new Date().getFullYear()), opponent: '', date: '', location: 'Home', result: '—' });\n  const toast = useToast();";
+if (source.includes(scheduleStateMarker)) {
+  source = source.replace(scheduleStateMarker, scheduleStateReplacement);
+} else if (!source.includes('const toast = useToast();') || !source.includes("season: activeGame?.season")) {
+  throw new Error('Could not find SchedulePage state marker');
+}
+
+// The original SchedulePage declares schedule/activeGame immediately after the draft.
+// Remove that duplicate declaration after the state replacement above.
+source = source.replace(
+  "  const [showArchived, setShowArchived] = useState(false);\n  const schedule = data.schedule;\n  const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];\n  const seasons =",
+  "  const [showArchived, setShowArchived] = useState(false);\n  const seasons ="
+);
+
+const localAddGame = `  const addGame = () => {\n    if (!draft.season.trim() || !draft.opponent.trim()) return;\n    const id = \`game-\${Date.now()}-\${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-') }\`;\n    const game: ScheduleGame = { ...draft, id, archived: false };\n    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };`;
+const persistedAddGame = `  const addGame = async () => {\n    if (!draft.season.trim() || !draft.opponent.trim()) return;\n    const seasonRecord = (await getSeasons()).find(item => String(item.season_year) === draft.season.trim());\n    if (isSupabaseConfigured) {\n      if (!seasonRecord) {\n        toast.notify(\`Season \${draft.season.trim()} was not found in Supabase.\`);\n        return;\n      }\n      try {\n        const created = await createGame({\n          seasonId: seasonRecord.id,\n          opponent: draft.opponent.trim(),\n          gameDate: draft.date || undefined,\n          location: draft.location,\n          result: draft.result,\n        });\n        if (!created) throw new Error('Supabase did not return the created game.');\n        const game: ScheduleGame = {\n          id: created.id,\n          season: String(seasonRecord.season_year),\n          opponent: created.opponent,\n          date: created.game_date ?? '',\n          location: created.location ?? '—',\n          result: created.game_result ?? '—',\n          archived: Boolean(created.archived),\n        };\n        setData({ ...data, schedule: [game, ...schedule], activeGameId: game.id });\n        setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n        toast.notify(\`Saved \${game.opponent} to the \${game.season} schedule.\`);\n      } catch (error) {\n        console.error('Could not save schedule game:', error);\n        toast.notify('Could not save that game to Supabase.');\n      }\n      return;\n    }\n    const id = \`game-\${Date.now()}-\${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-') }\`;\n    const game: ScheduleGame = { ...draft, id, archived: false };\n    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };`;
+if (source.includes(localAddGame)) {
+  source = source.replace(localAddGame, persistedAddGame);
+} else if (!source.includes("const seasonRecord = (await getSeasons()).find")) {
+  throw new Error('Could not find SchedulePage addGame implementation');
+}
+
+const localArchive = "  const toggleArchive = (id: string) => setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived: !game.archived } : game) });";
+const persistedArchive = `  const toggleArchive = async (id: string) => {\n    const target = schedule.find(game => game.id === id);\n    if (!target) return;\n    const archived = !target.archived;\n    if (isSupabaseConfigured) {\n      try {\n        const updated = await setGameArchived(id, archived);\n        if (!updated) throw new Error('Supabase did not return the updated game.');\n        setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived } : game) });\n      } catch (error) {\n        console.error('Could not update schedule game archive state:', error);\n        toast.notify('Could not update that game in Supabase.');\n      }\n      return;\n    }\n    setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived } : game) });\n  };`;
+if (source.includes(localArchive)) {
+  source = source.replace(localArchive, persistedArchive);
+} else if (!source.includes('const archived = !target.archived')) {
+  throw new Error('Could not find SchedulePage archive implementation');
+}
+
+// The schedule heading is for the active season; keep other seasons out of that
+// list while preserving archived toggle behavior.
+source = source.replace(
+  "  const visibleGames = schedule.filter(game => showArchived || !game.archived);",
+  "  const visibleGames = schedule.filter(game => game.season === activeGame?.season && (showArchived || !game.archived));"
+);
+
 fs.writeFileSync(appPath, source);
-console.log('Coach Connect branding sweep and Schedule upcoming-games quick view applied.');
+console.log('Coach Connect branding, Schedule quick view, and durable Supabase schedule persistence applied.');
