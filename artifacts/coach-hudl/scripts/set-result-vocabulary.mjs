@@ -32,13 +32,13 @@ const oldCells = "<td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{e
 const newCells = "<td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type)}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button";
 if (source.includes(oldCells)) source = source.replace(oldCells, newCells);
 
-// Import the database helpers used by the shared Live Game board.
 const oldImport = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
 const newImport = "import { createLivePlay, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
 if (source.includes(oldImport)) source = source.replace(oldImport, newImport);
+const oldSupabaseImport = "import { isSupabaseConfigured } from './lib/supabase';";
+const newSupabaseImport = "import { isSupabaseConfigured, supabase } from './lib/supabase';";
+if (source.includes(oldSupabaseImport)) source = source.replace(oldSupabaseImport, newSupabaseImport);
 
-// Install a single realtime subscription for the active game. Every client
-// reloads the authoritative plays rows when another coach changes the board.
 if (!source.includes('LIVE_REALTIME_INSTALLED')) {
   const liveStart = source.indexOf('function LivePage(');
   const liveEnd = source.indexOf('\nfunction ', liveStart + 12);
@@ -55,7 +55,6 @@ if (!source.includes('LIVE_REALTIME_INSTALLED')) {
   }
 }
 
-// Make the Add Play action persist the snap to Supabase when a Live Game is active.
 if (!source.includes('createLivePlay(data.activeGameId')) {
   const liveStart = source.indexOf('function LivePage(');
   const liveEnd = source.indexOf('\nfunction ', liveStart + 12);
@@ -71,8 +70,6 @@ if (!source.includes('createLivePlay(data.activeGameId')) {
   }
 }
 
-// Deterministic final pass: target only LiveSpreadsheetPage so earlier build-time
-// transforms cannot leave the old locked/prefilled UI behind. This is idempotent.
 const liveStart2 = source.indexOf('function LiveSpreadsheetPage(');
 const reportsStart = source.indexOf('function ReportsHubPage(', liveStart2);
 if (liveStart2 >= 0 && reportsStart > liveStart2) {
