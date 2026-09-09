@@ -36,32 +36,16 @@ const newCells = "<td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{e
 if (source.includes(oldCells)) source = source.replace(oldCells, newCells);
 
 // Deterministic final pass: target only LiveSpreadsheetPage so earlier build-time
-// transforms cannot leave the old locked/prefilled UI behind. This is deliberately
-// idempotent: if the requested markup is already present, it makes no changes.
+// transforms cannot leave the old locked/prefilled UI behind. This is idempotent.
 const liveStart = source.indexOf('function LiveSpreadsheetPage(');
 const reportsStart = source.indexOf('function ReportsHubPage(', liveStart);
 if (liveStart >= 0 && reportsStart > liveStart) {
   let liveSection = source.slice(liveStart, reportsStart);
-  liveSection = liveSection.replace(
-    /const \[form, setForm\] = useState<Play>\(\{[\s\S]*?result: '' \}\);/,
-    newFormInit
-  );
-  liveSection = liveSection.replace(
-    /const field = \(key: keyof Play, label: string, options\?: string\[\]\) =>[\s\S]*?;\n  const yardLineField =/,
-    `${newField}\n  const yardLineField =`
-  );
-  liveSection = liveSection.replace(
-    /<div className=\"form-grid\">[\s\S]*?<\/div><div className=\"actions\" style=\{\{ marginTop: 17 \}\}>/,
-    `${newFormGrid}<div className="actions" style={{ marginTop: 17 }}>`
-  );
-  liveSection = liveSection.replace(
-    /<thead><tr><th>Play<\/th>[\s\S]*?<\/tr><\/thead><tbody>\{live\.slice\(\)\.reverse\(\)\.map/,
-    `<thead><tr>${newHead}</tr></thead><tbody>{live.slice().reverse().map`
-  );
-  liveSection = liveSection.replace(
-    /<td>\{editCell\(i, 'odk',[\s\S]*?<td><button className=\"btn btn-danger\"/,
-    `${newCells}<button className="btn btn-danger"`
-  );
+  liveSection = liveSection.replace(/const \[form, setForm\] = useState<Play>\(\{[\s\S]*?result: '' \}\);/, newFormInit);
+  liveSection = liveSection.replace(/const field = \(key: keyof Play, label: string, options\?: string\[\]\) =>[\s\S]*?;\n  const yardLineField =/, `${newField}\n  const yardLineField =`);
+  liveSection = liveSection.replace(/<div className=\"form-grid\">[\s\S]*?<\/div><div className=\"actions\" style=\{\{ marginTop: 17 \}\}>/, `${newFormGrid}<div className=\"actions\" style={{ marginTop: 17 }}>`);
+  liveSection = liveSection.replace(/<thead><tr><th>Play<\/th>[\s\S]*?<\/tr><\/thead><tbody>\{live\.slice\(\)\.reverse\(\)\.map/, `<thead><tr>${newHead}</tr></thead><tbody>{live.slice().reverse().map`);
+  liveSection = liveSection.replace(/<td>\{editCell\(i, 'odk',[\s\S]*?<td><button className=\"btn btn-danger\"/, newCells);
   source = source.slice(0, liveStart) + liveSection + source.slice(reportsStart);
 }
 
