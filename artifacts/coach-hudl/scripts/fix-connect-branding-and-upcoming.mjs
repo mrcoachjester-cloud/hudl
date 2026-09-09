@@ -24,6 +24,7 @@ const replacements = [
   [/coach hudl/g, 'coach connect'],
   [/CoachHudl/g, 'CoachConnect'],
   [/COACH HUDL/g, 'COACH CONNECT'],
+  [/coach<span>hudl<\/span>/g, 'coach<span>connect</span>'],
 ];
 
 for (const file of [path.fileURLToPath(appPath), path.fileURLToPath(indexPath), ...walk(path.fileURLToPath(srcDir))]) {
@@ -60,7 +61,7 @@ if (!source.includes('Next 2 upcoming games')) {
 }
 
 // Add the icon used by the quick-reference empty state.
-if (source.includes('<CalendarClock') && !source.includes('CalendarClock,') && !source.includes('  CalendarClock,\n')) {
+if (source.includes('<CalendarClock') && !source.includes('CalendarClock,')) {
   source = source.replace('  BarChart3,\n', '  BarChart3,\n  CalendarClock,\n');
 }
 
