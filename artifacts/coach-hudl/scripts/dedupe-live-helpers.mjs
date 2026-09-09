@@ -27,34 +27,41 @@ function findFunctionEnd(text, start) {
   return -1;
 }
 
-// Some of the Live Game prebuild passes can independently add the same helper.
-// Keep the first definition and remove later duplicate declarations so TypeScript
-// never receives two block-scoped normalizeOdk functions.
+// Several Live Game prebuild passes can independently add the same helpers.
+// Keep the first definition of each helper and remove later duplicates so the
+// generated App.tsx cannot fail with block-scoped redeclaration errors.
 const marker = 'LIVE_HELPERS_DEDUPED';
 if (source.includes(marker)) process.exit(0);
 
-const pattern = /function\s+normalizeOdk\s*\(value:\s*string\)\s*\{/g;
-let match;
-let first = true;
-const removals = [];
-while ((match = pattern.exec(source)) !== null) {
-  if (first) {
-    first = false;
-    continue;
-  }
-  const end = findFunctionEnd(source, match.index);
-  if (end < 0) throw new Error('Could not determine duplicate normalizeOdk boundary');
-  let removeEnd = end;
-  while (removeEnd < source.length && (source[removeEnd] === '\n' || source[removeEnd] === '\r')) removeEnd++;
-  removals.push([match.index, removeEnd]);
-  pattern.lastIndex = removeEnd;
-}
+const helpers = [
+  /function\s+num\s*\(value:\s*string\)\s*\{/g,
+  /function\s+normalizeOdk\s*\(value:\s*string\)\s*\{/g,
+];
 
-for (let i = removals.length - 1; i >= 0; i--) {
-  const [start, end] = removals[i];
-  source = source.slice(0, start) + source.slice(end);
+let totalRemoved = 0;
+for (const pattern of helpers) {
+  let match;
+  let first = true;
+  const removals = [];
+  while ((match = pattern.exec(source)) !== null) {
+    if (first) {
+      first = false;
+      continue;
+    }
+    const end = findFunctionEnd(source, match.index);
+    if (end < 0) throw new Error(`Could not determine duplicate helper boundary near ${match.index}`);
+    let removeEnd = end;
+    while (removeEnd < source.length && (source[removeEnd] === '\n' || source[removeEnd] === '\r')) removeEnd++;
+    removals.push([match.index, removeEnd]);
+    pattern.lastIndex = removeEnd;
+  }
+  for (let i = removals.length - 1; i >= 0; i--) {
+    const [start, end] = removals[i];
+    source = source.slice(0, start) + source.slice(end);
+    totalRemoved++;
+  }
 }
 
 source += `\n// ${marker}\n`;
 fs.writeFileSync(appPath, source);
-console.log(`Live helper dedupe complete${removals.length ? `; removed ${removals.length} duplicate normalizeOdk declaration(s)` : ''}.`);
+console.log(`Live helper dedupe complete${totalRemoved ? `; removed ${totalRemoved} duplicate helper declaration(s)` : ''}.`);
