@@ -77,7 +77,7 @@ if (source.includes(footballDataImport) && !source.includes('setGameArchived')) 
 }
 
 const scheduleStateMarker = "function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {\n  const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });";
-const scheduleStateReplacement = "function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {\n  const schedule = data.schedule;\n  const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];\n  const [draft, setDraft] = useState({ season: activeGame?.season ?? String(new Date().getFullYear()), opponent: '', date: '', location: 'Home', result: '—' });\n  const toast = useToast();";
+const scheduleStateReplacement = "function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {\n  const schedule = data.schedule;\n  const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];\n  const [draft, setDraft] = useState({ season: activeGame?.season ?? String(new Date().getFullYear()), opponent: '', date: '', location: 'Home', result: '—' });\n  const [editingGameId, setEditingGameId] = useState<string | null>(null);\n  const toast = useToast();";
 if (source.includes(scheduleStateMarker)) {
   source = source.replace(scheduleStateMarker, scheduleStateReplacement);
 } else if (!source.includes('const toast = useToast();') || !source.includes("season: activeGame?.season")) {
@@ -99,6 +99,22 @@ if (source.includes(localAddGame)) {
   throw new Error('Could not find SchedulePage addGame implementation');
 }
 
+// Add an edit mode that reuses the existing schedule form. Saving an edit updates
+// the same Supabase game row, so changes survive refresh and do not affect Live Game data.
+const addGameEndMarker = "  };\n\nconst localArchive";
+const editBlock = `  };\n\n  const beginEditGame = (game: ScheduleGame) => {\n    setEditingGameId(game.id);\n    setDraft({ season: game.season, opponent: game.opponent, date: game.date || '', location: game.location === '—' ? 'Home' : game.location, result: game.result || '—' });\n  };\n\n  const cancelEditGame = () => {\n    setEditingGameId(null);\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };\n\n  const saveScheduleGame = async () => {\n    if (!editingGameId) {\n      await addGame();\n      return;\n    }\n    if (!draft.season.trim() || !draft.opponent.trim()) return;\n    const target = schedule.find(game => game.id === editingGameId);\n    if (!target) return;\n    const seasonRecord = (await getSeasons()).find(item => String(item.season_year) === draft.season.trim());\n    if (isSupabaseConfigured) {\n      if (!seasonRecord) {\n        toast.notify(\`Season \${draft.season.trim()} was not found in Supabase.\`);\n        return;\n      }\n      try {\n        const { data: updated, error } = await supabase.from('games').update({\n          season_id: seasonRecord.id,\n          opponent: draft.opponent.trim(),\n          game_date: draft.date || null,\n          location: draft.location,\n          game_result: draft.result && draft.result !== '—' ? draft.result : null,\n        }).eq('id', editingGameId).select('*').single();\n        if (error) throw error;\n        if (!updated) throw new Error('Supabase did not return the updated game.');\n        const updatedGame: ScheduleGame = {\n          id: updated.id,\n          season: String(seasonRecord.season_year),\n          opponent: updated.opponent,\n          date: updated.game_date ?? '',\n          location: updated.location ?? '—',\n          result: updated.game_result ?? '—',\n          archived: Boolean(updated.archived),\n        };\n        setData({ ...data, schedule: schedule.map(game => game.id === editingGameId ? updatedGame : game), activeGameId: editingGameId });\n        setEditingGameId(null);\n        setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n        toast.notify(\`Updated \${updatedGame.opponent} on the \${updatedGame.season} schedule.\`);\n      } catch (error) {\n        console.error('Could not update schedule game:', error);\n        toast.notify('Could not update that game in Supabase.');\n      }\n      return;\n    }\n    const updatedGame: ScheduleGame = { ...target, season: draft.season.trim(), opponent: draft.opponent.trim(), date: draft.date, location: draft.location, result: draft.result };\n    setData({ ...data, schedule: schedule.map(game => game.id === editingGameId ? updatedGame : game), activeGameId: editingGameId });\n    setEditingGameId(null);\n    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));\n  };\n\nconst localArchive`;
+if (source.includes(addGameEndMarker)) {
+  source = source.replace(addGameEndMarker, editBlock);
+} else if (!source.includes('const saveScheduleGame = async')) {
+  throw new Error('Could not find addGame boundary for schedule edit mode');
+}
+
+// The edit flow uses the same Supabase client already used by the app.
+const supabaseImport = "import { isSupabaseConfigured } from './lib/supabase';";
+if (source.includes(supabaseImport) && !source.includes("import { isSupabaseConfigured, supabase } from './lib/supabase';")) {
+  source = source.replace(supabaseImport, "import { isSupabaseConfigured, supabase } from './lib/supabase';");
+}
+
 const localArchive = "  const toggleArchive = (id: string) => setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived: !game.archived } : game) });";
 const persistedArchive = `  const toggleArchive = async (id: string) => {\n    const target = schedule.find(game => game.id === id);\n    if (!target) return;\n    const archived = !target.archived;\n    if (isSupabaseConfigured) {\n      try {\n        const updated = await setGameArchived(id, archived);\n        if (!updated) throw new Error('Supabase did not return the updated game.');\n        setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived } : game) });\n      } catch (error) {\n        console.error('Could not update schedule game archive state:', error);\n        toast.notify('Could not update that game in Supabase.');\n      }\n      return;\n    }\n    setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived } : game) });\n  };`;
 if (source.includes(localArchive)) {
@@ -114,5 +130,18 @@ source = source.replace(
   "  const visibleGames = schedule.filter(game => game.season === activeGame?.season && (showArchived || !game.archived));"
 );
 
+// Reuse the existing form for both adding and editing. Add a Cancel action only in edit mode.
+source = source.replace(
+  "<button className=\"btn btn-primary\" onClick={addGame} disabled={!draft.season.trim() || !draft.opponent.trim()} data-testid=\"button-add-schedule-game\"><Plus /> Add game</button>",
+  "<div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button className=\"btn btn-primary\" onClick={saveScheduleGame} disabled={!draft.season.trim() || !draft.opponent.trim()} data-testid=\"button-save-schedule-game\">{editingGameId ? <Check /> : <Plus />}{editingGameId ? ' Save changes' : ' Add game'}</button>{editingGameId && <button className=\"btn btn-ghost\" onClick={cancelEditGame} data-testid=\"button-cancel-schedule-edit\"><X /> Cancel</button>}</div>"
+);
+
+// Add an Edit action beside Archive/Restore for every schedule row.
+const scheduleRowArchive = "<button className={`btn ${game.archived ? 'btn-ghost' : 'btn-danger'}`} onClick={() => toggleArchive(game.id)} data-testid={`button-archive-game-${game.id}`}>{game.archived ? 'Restore' : 'Archive'}</button>";
+const scheduleRowActions = "<div style={{ display: 'flex', gap: 8 }}><button className=\"btn btn-ghost\" onClick={() => beginEditGame(game)} data-testid={`button-edit-game-${game.id}`}><Search /> Edit</button>" + scheduleRowArchive + "</div>";
+if (source.includes(scheduleRowArchive) && !source.includes('button-edit-game-')) {
+  source = source.replace(scheduleRowArchive, scheduleRowActions);
+}
+
 fs.writeFileSync(appPath, source);
-console.log('Coach Connect branding, Schedule quick view, and durable Supabase schedule persistence applied.');
+console.log('Coach Connect branding, Schedule quick view, durable Supabase schedule persistence, and schedule editing applied.');
