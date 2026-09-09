@@ -9,6 +9,9 @@ export type Game = {
 export type LivePlay = {
   id: string; game_id: string; play_number: number; odk: string | null; down: number | null; dist: number | null; hash: string | null; gnls: number | null; yard_line: number | null; play_type: string | null; result: string | null; off_formation: string | null; personnel: string | null; scheme: string | null; motion: string | null; off_play: string | null; ball_carrier: string | null; defense: string | null; play_dir: string | null; backfield: string | null; created_at: string; updated_at?: string; updated_by?: string | null;
 };
+export type LivePlayDraft = {
+  game_id: string; play_number: number; odk: string | null; down: number | null; dist: number | null; hash: string | null; yard_line: number | null; play_type: string | null; result: string | null; off_formation: string | null; off_play: string | null; ball_carrier: string | null; defense: string | null; gnls: number | null; updated_at: string; updated_by: string | null;
+};
 export type ScoutingSession = {
   id: string; season_id: string; game_id: string | null; opponent: string; week: number | null; description: string | null; archived: boolean; uploaded_at: string | null; created_at: string;
 };
@@ -34,6 +37,28 @@ export async function getGame(gameId: string): Promise<Game | null> { if (!supab
 export async function getLivePlays(gameId: string): Promise<LivePlay[]> { if (!supabase) return []; const { data, error } = await supabase.from('plays').select('*').eq('game_id', gameId).order('play_number', { ascending: true }); if (error) throw error; return data ?? []; }
 export async function createLivePlay(gameId: string, play: StandardPlay): Promise<LivePlay | null> { if (!supabase || !gameId) return null; const row = { game_id: gameId, play_number: Number(play.playNo) || 1, odk: play.odk || null, down: Number(play.dn) || null, dist: Number(play.dist) || null, hash: play.hash || null, gnls: Number(play.gnls) || 0, yard_line: Number(String(play.yardLn).replace(/[^0-9-]/g, '')) || null, play_type: play.type || null, result: play.result || null, off_formation: play.form || null, personnel: play.personnel || null, scheme: play.scheme || null, motion: play.motion || null, off_play: play.offPlay || null, ball_carrier: play.carrier || null, defense: play.defense || null, play_dir: play.dir || null, backfield: play.backfield || null }; const { data, error } = await supabase.from('plays').insert(row).select('*').single(); if (error) throw error; return data; }
 export async function updateLivePlay(playId: string, field: string, value: string): Promise<LivePlay | null> { if (!supabase || !playId) return null; const map: Record<string, string> = { odk:'odk', dn:'down', dist:'dist', hash:'hash', yardLn:'yard_line', type:'play_type', result:'result', form:'off_formation', offPlay:'off_play', carrier:'ball_carrier', defense:'defense' }; const column = map[field]; if (!column) return null; const numeric = ['down','dist','yard_line'].includes(column); const { data, error } = await supabase.from('plays').update({ [column]: numeric ? (Number(String(value).replace(/[^0-9-]/g, '')) || null) : value }).eq('id', playId).select('*').single(); if (error) throw error; return data; }
+
+const draftNumber = (value: unknown, fallback: number | null = null) => { const n = Number(value); return Number.isFinite(n) && n !== 0 ? n : fallback; };
+export async function getLivePlayDraft(gameId: string): Promise<LivePlayDraft | null> { if (!supabase || !gameId) return null; const { data, error } = await supabase.from('live_play_drafts').select('*').eq('game_id', gameId).maybeSingle(); if (error) throw error; return data ?? null; }
+export async function upsertLivePlayDraft(gameId: string, play: Partial<StandardPlay>, updatedBy?: string): Promise<LivePlayDraft | null> {
+  if (!supabase || !gameId) return null;
+  const row: Record<string, unknown> = { game_id: gameId, play_number: draftNumber(play.playNo, 1), updated_by: updatedBy ?? null };
+  const map: Record<string, string> = { odk:'odk', dn:'down', dist:'dist', hash:'hash', yardLn:'yard_line', type:'play_type', result:'result', form:'off_formation', offPlay:'off_play', carrier:'ball_carrier', defense:'defense', gnls:'gnls' };
+  for (const [key, column] of Object.entries(map)) {
+    if (Object.prototype.hasOwnProperty.call(play, key)) {
+      const value = (play as Record<string, unknown>)[key];
+      if (['down','dist','yardLn','gnls'].includes(key)) row[column] = draftNumber(value);
+      else row[column] = value === '' || value === '—' ? null : value;
+    }
+  }
+  const { data, error } = await supabase.from('live_play_drafts').upsert(row, { onConflict: 'game_id' }).select('*').single();
+  if (error) throw error;
+  return data;
+}
+export async function clearLivePlayDraft(gameId: string): Promise<void> { if (!supabase || !gameId) return; const { error } = await supabase.from('live_play_drafts').delete().eq('game_id', gameId); if (error) throw error; }
+export function liveDraftToStandard(draft: LivePlayDraft, previousYardLine = ''): StandardPlay {
+  return { playNo: String(draft.play_number ?? 1).padStart(2, '0'), odk: draft.odk ?? '', dn: draft.down !== null ? String(draft.down) : '', dist: draft.dist !== null ? String(draft.dist) : '', hash: draft.hash ?? '', gnls: draft.gnls !== null ? String(draft.gnls) : '0', carrier: draft.ball_carrier ?? '', yardLn: draft.yard_line !== null ? String(draft.yard_line) : previousYardLine, type: draft.play_type ?? '', result: draft.result ?? '', form: draft.off_formation ?? '', personnel: '', scheme: '', defense: draft.defense ?? '', motion: '', offPlay: draft.off_play ?? '', dir: '', backfield: '' };
+}
 export async function getScoutingSessions(seasonId: string): Promise<ScoutingSession[]> { if (!supabase) return []; const { data, error } = await supabase.from('scouting_sessions').select('*').eq('season_id', seasonId).eq('archived', false).order('created_at', { ascending: false }); if (error) throw error; return data ?? []; }
 export async function getScoutingPlays(sessionId: string): Promise<ScoutingPlay[]> { if (!supabase) return []; const { data, error } = await supabase.from('scouting_plays').select('*').eq('scouting_session_id', sessionId).order('play_no', { ascending: true }); if (error) throw error; return data ?? []; }
 export async function createScoutingSession(input: { seasonId: string; team: string; description: string }): Promise<ScoutingSession | null> { if (!supabase) return null; const id = crypto.randomUUID(); const { error } = await supabase.from('scouting_sessions').insert({ id, season_id: input.seasonId, opponent: input.team.trim(), description: input.description || 'Scout File', archived: false }); if (error) throw error; const { data, error: readError } = await supabase.from('scouting_sessions').select('*').eq('id', id).maybeSingle(); if (readError) throw readError; if (!data) throw new Error('Scout File was created but could not be read back from Supabase.'); return data; }
