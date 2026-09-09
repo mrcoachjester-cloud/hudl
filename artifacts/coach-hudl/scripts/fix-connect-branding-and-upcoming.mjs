@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('..', import.meta.url);
 const srcDir = new URL('./src/', root);
@@ -27,7 +28,7 @@ const replacements = [
   [/coach<span>hudl<\/span>/g, 'coach<span>connect</span>'],
 ];
 
-for (const file of [path.fileURLToPath(appPath), path.fileURLToPath(indexPath), ...walk(path.fileURLToPath(srcDir))]) {
+for (const file of [fileURLToPath(appPath), fileURLToPath(indexPath), ...walk(fileURLToPath(srcDir))]) {
   let source = fs.readFileSync(file, 'utf8');
   const original = source;
   for (const [pattern, replacement] of replacements) source = source.replace(pattern, replacement);
