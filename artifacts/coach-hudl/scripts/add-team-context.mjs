@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 
-const path = new URL('../src/App.tsx', import.meta.url);
-let source = fs.readFileSync(path, 'utf8');
+const appPath = new URL('../src/App.tsx', import.meta.url);
+const indexPath = new URL('../index.html', import.meta.url);
+let source = fs.readFileSync(appPath, 'utf8');
+let indexSource = fs.readFileSync(indexPath, 'utf8');
 
 function replaceOnce(from, to, label) {
   if (!source.includes(from)) {
@@ -53,5 +55,11 @@ replaceOnce(
   'top Team selector'
 );
 
-fs.writeFileSync(path, source);
-console.log('Season + Team header context restored.');
+// Rebrand visible product text and profile initials. Internal storage/database keys are left alone.
+source = source.replaceAll('Coach Hudl', 'Coach Connect');
+source = source.replace(/(<div className=\"avatar\"[^>]*>\s*)JR(\s*<\/div>)/, '$1WHS$2');
+indexSource = indexSource.replaceAll('Coach Hudl', 'Coach Connect');
+
+fs.writeFileSync(appPath, source);
+fs.writeFileSync(indexPath, indexSource);
+console.log('Season + Team header context restored and app rebranded as Coach Connect.');
