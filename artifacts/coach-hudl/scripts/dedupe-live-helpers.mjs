@@ -27,19 +27,20 @@ function findFunctionEnd(text, start) {
   return -1;
 }
 
-// Several Live Game prebuild passes can independently add the same helpers.
-// Keep the first definition of each helper and remove later duplicates so the
-// generated App.tsx cannot fail with block-scoped redeclaration errors.
 const marker = 'LIVE_HELPERS_DEDUPED';
 if (source.includes(marker)) process.exit(0);
 
-const helpers = [
-  /function\s+num\s*\(value:\s*string\)\s*\{/g,
-  /function\s+normalizeOdk\s*\(value:\s*string\)\s*\{/g,
+// The build currently runs several historical App.tsx transformers. Some of
+// those transformers can insert the same top-level declaration more than once.
+// Remove later copies, keeping the first complete function definition.
+const declarations = [
+  ['num', /function\s+num\s*\(value:\s*string\)\s*\{/g],
+  ['normalizeOdk', /function\s+normalizeOdk\s*\(value:\s*string\)\s*\{/g],
+  ['ReportsPage', /function\s+ReportsPage\s*\([^)]*\)\s*\{/g],
 ];
 
 let totalRemoved = 0;
-for (const pattern of helpers) {
+for (const [name, pattern] of declarations) {
   let match;
   let first = true;
   const removals = [];
@@ -49,7 +50,7 @@ for (const pattern of helpers) {
       continue;
     }
     const end = findFunctionEnd(source, match.index);
-    if (end < 0) throw new Error(`Could not determine duplicate helper boundary near ${match.index}`);
+    if (end < 0) throw new Error(`Could not determine duplicate ${name} boundary near ${match.index}`);
     let removeEnd = end;
     while (removeEnd < source.length && (source[removeEnd] === '\n' || source[removeEnd] === '\r')) removeEnd++;
     removals.push([match.index, removeEnd]);
@@ -64,4 +65,4 @@ for (const pattern of helpers) {
 
 source += `\n// ${marker}\n`;
 fs.writeFileSync(appPath, source);
-console.log(`Live helper dedupe complete${totalRemoved ? `; removed ${totalRemoved} duplicate helper declaration(s)` : ''}.`);
+console.log(`Generated declaration cleanup complete${totalRemoved ? `; removed ${totalRemoved} duplicate declaration(s)` : ''}.`);
