@@ -12,15 +12,12 @@ const resultOptions = "['Complete', 'Complete, TD', 'Fumble', 'Good', 'Incomplet
 const occurrences = source.split(oldOptions).length - 1;
 if (occurrences > 0) source = source.replaceAll(oldOptions, resultOptions);
 
-// Start each new Live Game snap with only the situation fields carried forward.
-// The scouting-derived fields are intentionally blank so the sideline never gets
-// an automatic play call. Coaches can type a value or use the datalist suggestions.
+// Start each new Live Game snap with blank scouting-driven fields.
 const oldFormInit = "const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', result: '' });";
 const newFormInit = "const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', form: '', offPlay: '', type: '', carrier: '', defense: '', result: '' });";
 if (source.includes(oldFormInit)) source = source.replace(oldFormInit, newFormInit);
 
-// Replace the Live Game field helper with a uniquely named editable helper.
-// Using a unique identifier prevents collisions with any other prebuild patch.
+// Make scouting-derived fields editable text inputs with datalist suggestions.
 const oldField = "const field = (key: keyof Play, label: string, options?: string[]) => <div className=\"field\"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className=\"input\" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;";
 const newField = "const liveEditableValues = (key: keyof Play) => Array.from(new Set([...data.scouting.map(play => play[key]), ...data.live.map(play => play[key])].map(value => String(value ?? '').trim()).filter(value => value && value !== '—'))); const liveEditableField = (key: keyof Play, label: string) => { const values = liveEditableValues(key); const listId = `live-suggestions-${key}`; return <div className=\"field\"><label htmlFor={`live-${key}`}>{label}</label><input id={`live-${key}`} className=\"input\" list={values.length ? listId : undefined} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />{values.length ? <datalist id={listId}>{values.map(value => <option key={value} value={value} />)}</datalist> : null}</div>; }; const field = (key: keyof Play, label: string, options?: string[]) => <div className=\"field\"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className=\"input\" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;";
 if (source.includes(oldField)) source = source.replace(oldField, newField);
@@ -38,8 +35,39 @@ const oldCells = "<td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{e
 const newCells = "<td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type)}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button";
 if (source.includes(oldCells)) source = source.replace(oldCells, newCells);
 
+// Deterministic final pass: target only LiveSpreadsheetPage so earlier build-time
+// transforms cannot leave the old locked/prefilled UI behind. This is deliberately
+// idempotent: if the requested markup is already present, it makes no changes.
+const liveStart = source.indexOf('function LiveSpreadsheetPage(');
+const reportsStart = source.indexOf('function ReportsHubPage(', liveStart);
+if (liveStart >= 0 && reportsStart > liveStart) {
+  let liveSection = source.slice(liveStart, reportsStart);
+  liveSection = liveSection.replace(
+    /const \[form, setForm\] = useState<Play>\(\{[\s\S]*?result: '' \}\);/,
+    newFormInit
+  );
+  liveSection = liveSection.replace(
+    /const field = \(key: keyof Play, label: string, options\?: string\[\]\) =>[\s\S]*?;\n  const yardLineField =/,
+    `${newField}\n  const yardLineField =`
+  );
+  liveSection = liveSection.replace(
+    /<div className=\"form-grid\">[\s\S]*?<\/div><div className=\"actions\" style=\{\{ marginTop: 17 \}\}>/,
+    `${newFormGrid}<div className="actions" style={{ marginTop: 17 }}>`
+  );
+  liveSection = liveSection.replace(
+    /<thead><tr><th>Play<\/th>[\s\S]*?<\/tr><\/thead><tbody>\{live\.slice\(\)\.reverse\(\)\.map/,
+    `<thead><tr>${newHead}</tr></thead><tbody>{live.slice().reverse().map`
+  );
+  liveSection = liveSection.replace(
+    /<td>\{editCell\(i, 'odk',[\s\S]*?<td><button className=\"btn btn-danger\"/,
+    `${newCells}<button className="btn btn-danger"`
+  );
+  source = source.slice(0, liveStart) + liveSection + source.slice(reportsStart);
+}
+
 if (!source.includes("liveEditableField('form', 'Formation')")) throw new Error('Could not install Live Game scouting-driven fields');
 if (!source.includes('<th>Formation</th><th>Play Call</th><th>Play Type</th>')) throw new Error('Could not reorder Live Game spreadsheet columns');
+if (!source.includes("field('result', 'Result', ['Complete', 'Complete, TD', 'Fumble'")) throw new Error('Could not install Live Game result vocabulary');
 
 fs.writeFileSync(appPath, source);
-console.log(`Live Game Result vocabulary and editable scouting-driven inputs configured${occurrences ? ` (${occurrences} Result field lists updated)` : ''}.`);
+console.log(`Live Game UI configured deterministically${occurrences ? ` (${occurrences} Result field lists updated)` : ''}.`);
