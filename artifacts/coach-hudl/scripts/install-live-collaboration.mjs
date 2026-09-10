@@ -67,7 +67,7 @@ for (let n = matches.length - 1; n >= 0; n--) {
   const marker = 'LIVE_CROSS_APP_COLLAB_FINAL';
   if (section.includes(marker)) break;
 
-  const effect = `\n  // ${marker}\n  const liveBroadcastRef = useRef<any>(null);\n  useEffect(() => {\n    if (!isSupabaseConfigured || !data.activeGameId || !supabase) return;\n    let cancelled = false;\n    const gameId = data.activeGameId;\n    const channel = supabase.channel('live-game-sync:' + gameId);\n    liveBroadcastRef.current = channel;\n    const refreshSaved = async () => {\n      try {\n        const remote = await getLivePlays(gameId);\n        if (!cancelled) setData({ ...data, live: remote.map(livePlayToStandard) });\n      } catch (error) { console.warn('Could not refresh shared Live Game plays:', error); }\n    };\n    channel\n      .on('broadcast', { event: 'live-draft' }, ({ payload }) => {\n        if (cancelled || !payload?.form) return;\n        setForm(payload.form as Play);\n        if (payload.startingYardLine !== undefined) setStartingYardLine(String(payload.startingYardLine));\n      })\n      .on('broadcast', { event: 'live-saved-refresh' }, () => { void refreshSaved(); })\n      .on('postgres_changes', { event: '*', schema: 'public', table: 'plays', filter: 'game_id=eq.' + gameId }, () => { void refreshSaved(); })\n      .on('postgres_changes', { event: '*', schema: 'public', table: 'live_play_drafts', filter: 'game_id=eq.' + gameId }, (payload) => {\n        if (cancelled || payload.eventType === 'DELETE' || !payload.new) return;\n        const draft = payload.new;\n        setForm(liveDraftToStandard(draft, startingYardLine));\n        if (draft.starting_yard_line !== null && draft.starting_yard_line !== undefined) setStartingYardLine(String(draft.starting_yard_line));\n      })\n      .subscribe((status) => {\n        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') console.warn('Live Game realtime channel status:', status);\n      });\n    void refreshSaved();\n    return () => { cancelled = true; if (liveBroadcastRef.current === channel) liveBroadcastRef.current = null; void supabase.removeChannel(channel); };\n  }, [data.activeGameId]);\n`;
+  const effect = `\n  // ${marker}\n  const liveBroadcastRef = useRef<any>(null);\n  useEffect(() => {\n    if (!isSupabaseConfigured || !data.activeGameId || !supabase) return;\n    let cancelled = false;\n    const gameId = data.activeGameId;\n    const channel = supabase.channel('live-game-sync:' + gameId);\n    liveBroadcastRef.current = channel;\n    const refreshSaved = async () => {\n      try {\n        const remote = await getLivePlays(gameId);\n        if (!cancelled) setData({ ...data, live: remote.map(livePlayToStandard) });\n      } catch (error) { console.warn('Could not refresh shared Live Game plays:', error); }\n    };\n    channel\n      .on('broadcast', { event: 'live-draft' }, ({ payload }) => {\n        if (cancelled || !payload?.form) return;\n        setForm(payload.form as Play);\n        if (payload.startingYardLine !== undefined) setStartingYardLine(String(payload.startingYardLine));\n      })\n      .on('broadcast', { event: 'live-starting-yard-line' }, ({ payload }) => {\n        if (cancelled || payload?.value === undefined) return;\n        setStartingYardLine(String(payload.value));\n      })\n      .on('broadcast', { event: 'live-saved-refresh' }, () => { void refreshSaved(); })\n      .on('postgres_changes', { event: '*', schema: 'public', table: 'plays', filter: 'game_id=eq.' + gameId }, () => { void refreshSaved(); })\n      .subscribe((status) => {\n        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') console.warn('Live Game realtime channel status:', status);\n      });\n    void refreshSaved();\n    return () => { cancelled = true; if (liveBroadcastRef.current === channel) liveBroadcastRef.current = null; void supabase.removeChannel(channel); };\n  }, [data.activeGameId]);\n`;
 
   const existingV3 = section.indexOf('  // LIVE_SAVED_COLLABORATION_V3');
   const existingDraftMarker = section.indexOf('  // LIVE_DRAFT_UPDATE_V3');
@@ -81,9 +81,26 @@ for (let n = matches.length - 1; n >= 0; n--) {
 
   const updatePattern = /const update = \(key: keyof Play, value: string\) => setForm\(current => \(\{ \.\.\.current, \[key\]: value \}\)\);/;
   if (updatePattern.test(section)) {
-    const replacement = `const update = (key: keyof Play, value: string) => {\n    const nextForm = { ...form, [key]: value };\n    setForm(nextForm);\n    if (isSupabaseConfigured && data.activeGameId) {\n      const send = liveBroadcastRef.current?.send({ type: 'broadcast', event: 'live-draft', payload: { form: nextForm, startingYardLine } });\n      void Promise.resolve(send)\n        .then(() => upsertLivePlayDraft(data.activeGameId, nextForm, undefined))\n        .catch(error => console.warn('Could not broadcast Live Game draft:', error));\n    }\n  };`;
+    const replacement = `const update = (key: keyof Play, value: string) => {\n    const nextForm = { ...form, [key]: value };\n    setForm(nextForm);\n    if (isSupabaseConfigured && data.activeGameId) {\n      const send = liveBroadcastRef.current?.send({ type: 'broadcast', event: 'live-draft', payload: { form: nextForm, startingYardLine } });\n      void Promise.resolve(send)\n        .then(() => upsertLivePlayDraft(data.activeGameId, { ...nextForm, startingYardLine }, undefined))\n        .catch(error => console.warn('Could not broadcast Live Game draft:', error));\n    }\n  };`;
     section = section.replace(updatePattern, replacement);
   }
+
+  const startingInputPattern = /onChange=\{event => setStartingYardLine\(event\.target\.value\)\}/;
+  if (startingInputPattern.test(section)) {
+    const helper = `const updateStartingYardLine = (value: string) => {\n    setStartingYardLine(value);\n    if (isSupabaseConfigured && data.activeGameId) {\n      const send = liveBroadcastRef.current?.send({ type: 'broadcast', event: 'live-starting-yard-line', payload: { value } });\n      void Promise.resolve(send)\n        .then(() => upsertLivePlayDraft(data.activeGameId, { ...form, startingYardLine: value }, undefined))\n        .catch(error => console.warn('Could not sync starting yard line:', error));\n    }\n  };\n  `;
+    const markerIndex = section.indexOf('  // ' + marker);
+    const insertAt = markerIndex >= 0 ? markerIndex : 0;
+    section = section.slice(0, insertAt) + helper + section.slice(insertAt);
+    section = section.replace(startingInputPattern, 'onChange={event => updateStartingYardLine(event.target.value)}');
+  }
+
+  // The Broadcast event is the authoritative low-latency draft sync. Listening to
+  // our own Postgres draft changes causes a keystroke race: Supabase can echo the
+  // just-written row back while the user is still typing a yard line, which makes
+  // the controlled input appear to reset. Keep Postgres for persistence/recovery,
+  // but do not feed draft row changes back into the live form.
+  const draftRealtimePattern = /\n\s*\.on\('postgres_changes', \{ event: '\*', schema: 'public', table: 'live_play_drafts'[\s\S]*?\n\s*\}\)\n/;
+  section = section.replace(draftRealtimePattern, '\n');
 
   source = source.slice(0, functionStart) + section + source.slice(functionEnd);
   break;
@@ -98,4 +115,4 @@ if (!source.includes('data-testid="select-global-game"')) {
 }
 
 fs.writeFileSync(appPath, source);
-console.log('Live Game cross-app collaboration installed with Supabase Broadcast + database sync.');
+console.log('Live Game cross-app collaboration installed with stable yard-line draft handling.');
