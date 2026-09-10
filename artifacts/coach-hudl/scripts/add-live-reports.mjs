@@ -19,8 +19,6 @@ if (source.includes(footballDataImport) && !source.includes('import { createGame
 
 const importLine = "import LiveReportsPage from './ReportsHubPage';";
 if (!source.includes(importLine)) {
-  // App.tsx has been patched by earlier prebuild scripts, so do not depend on
-  // one exact import existing. Insert after the import block instead.
   const imports = [...source.matchAll(/^import .*;$/gm)];
   if (!imports.length) throw new Error('Reports patch: App.tsx import block not found');
   const lastImport = imports[imports.length - 1];
@@ -93,13 +91,17 @@ if (source.includes(oldLoader)) {
   throw new Error('Reports patch: Supabase play loader block not found');
 }
 
+// A few historical transforms emitted a Reports route using a free `data`
+// identifier. Keep a module-level fallback so those generated references can
+// never crash the application before React mounts.
+if (!/\bconst\s+data\s*=\s*safeLoad\(\);/.test(source)) {
+  source = source.replace(/\nfunction\s+saveDataset\s*\(/, '\nconst data = safeLoad();\n\nfunction saveDataset(');
+}
+
 fs.writeFileSync(appPath, source);
 
 if (fs.existsSync(reportsPath)) {
   let reports = fs.readFileSync(reportsPath, 'utf8');
-  // IMPORTANT: scouting O is the opponent offense. Live D is our defense.
-  // Do not compare Live D against scouting D, because that would compare two
-  // different football perspectives.
   const oldPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='D'), current = live.filter(p=>odk(p.odk)==='D');";
   const newPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='O'), current = live.filter(p=>odk(p.odk)==='D');";
   if (reports.includes(oldPerspective)) {
