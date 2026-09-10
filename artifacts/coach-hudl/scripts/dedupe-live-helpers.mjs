@@ -99,10 +99,11 @@ const duplicateFunctionNames = [
   'num', 'normalizeOdk', 'normalizeYardLine', 'yardLineToFieldPosition',
   'calculateGnls', 'formatGnls', 'deriveLiveGains', 'recalculateLiveGains',
   'isExplosive', 'average', 'csvCell', 'download', 'normalizeHeader', 'parseCsv',
-  'insertLivePlay', 'updateLivePlay', 'deleteLivePlay', 'AppShell', 'PageHead',
-  'Panel', 'SectionTitle', 'Toast', 'useToast', 'Kpi', 'Dashboard', 'UploadPage',
-  'ScoutPage', 'LivePage', 'LiveSpreadsheetPage', 'ReportsHubPage', 'SchedulePage',
-  'NotFoundPage', 'HudlCsvExportBar', 'Router', 'App', 'ReportsPage',
+  'insertLivePlay', 'updateLivePlay', 'deleteLivePlay', 'safeLoad', 'saveDataset',
+  'AppShell', 'PageHead', 'Panel', 'SectionTitle', 'Toast', 'useToast', 'Kpi',
+  'Dashboard', 'UploadPage', 'ScoutPage', 'LivePage', 'LiveSpreadsheetPage',
+  'ReportsHubPage', 'SchedulePage', 'NotFoundPage', 'HudlCsvExportBar', 'Router',
+  'App', 'ReportsPage',
 ];
 
 for (const name of duplicateFunctionNames) {
