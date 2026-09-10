@@ -89,7 +89,6 @@ if (defaultAppExports.length > 1) {
 }
 
 // Reports routes must not use a free module-level `data` identifier.
-// Resolve every generated report route/prop at the final transformation stage.
 const reportRouteDataPattern = /(<Route\s+path=["']\/reports["'][\s\S]{0,1600}?)data=\{data\}/g;
 const beforeReportRoutes = source;
 source = source.replace(reportRouteDataPattern, '$1data={safeLoad()}');
@@ -100,28 +99,27 @@ const beforeReportComponents = source;
 source = source.replace(reportComponentDataPattern, '$1data={safeLoad()}');
 if (source !== beforeReportComponents) totalRemoved++;
 
-// Remove module-level fallbacks from earlier transformers. A module-level
-// `const data = safeLoad()` at the end of the module can leave generated code
-// executing before the binding is initialized. We instead place one `let data`
-// immediately after the hoisted safeLoad function declaration, before any
-// component/router initialization can execute.
+// Remove module-level `data = safeLoad()` fallbacks from earlier transforms.
+// They can create collisions or temporal-dead-zone failures.
 const moduleDataFallback = /(^|\n)\s*(?:const|let|var)\s+data\s*=\s*safeLoad\(\);\s*(?=\n|$)/g;
 const beforeFallbackCleanup = source;
 source = source.replace(moduleDataFallback, '$1');
 if (source !== beforeFallbackCleanup) totalRemoved++;
 
+// Some older transforms still emit a bare `data` identifier. Do not declare a
+// lexical `data` binding here: if the reference lives in another generated
+// scope/module, that binding cannot fix it and can itself introduce a TDZ.
+// Instead expose the persisted dataset as a global fallback. This is intentionally
+// a last-resort compatibility shim while the generated transforms are consolidated.
 const safeLoadMatch = /function\s+safeLoad\s*\([^)]*\)\s*\{/;
 const safeLoadStartMatch = source.match(safeLoadMatch);
 if (safeLoadStartMatch && safeLoadStartMatch.index != null) {
   const safeLoadEnd = findFunctionEnd(source, safeLoadStartMatch.index);
-  if (safeLoadEnd >= 0 && !/\n(?:const|let|var)\s+data\s*=\s*safeLoad\(\);/.test(source.slice(safeLoadEnd, safeLoadEnd + 80))) {
-    source = source.slice(0, safeLoadEnd) + '\nlet data = safeLoad();' + source.slice(safeLoadEnd);
+  if (safeLoadEnd >= 0 && !/globalThis\.data\s*=\s*safeLoad\(\);/.test(source)) {
+    source = source.slice(0, safeLoadEnd) + '\nglobalThis.data = safeLoad();' + source.slice(safeLoadEnd);
   }
 }
 
-// Final broad guard for generated JSX prop references. Existing component-local
-// `data` variables remain valid because this only changes JSX expressions whose
-// value is exactly the identifier `data`.
 const anyDataProp = /data=\{data\}/g;
 const beforeAnyDataProp = source;
 source = source.replace(anyDataProp, 'data={safeLoad()}');
