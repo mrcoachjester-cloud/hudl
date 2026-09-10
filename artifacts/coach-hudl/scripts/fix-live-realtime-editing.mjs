@@ -11,6 +11,56 @@ let source = fs.readFileSync(appPath, 'utf8');
 const marker = 'LIVE_REALTIME_EDITING_HARDENED';
 if (source.includes(marker)) process.exit(0);
 
+function findMatchingParen(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIndex; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function findFunctionBodyStart(text, start) {
+  const openParen = text.indexOf('(', start);
+  if (openParen < 0) return -1;
+  const signatureEnd = findMatchingParen(text, openParen);
+  if (signatureEnd < 0) return -1;
+  return text.indexOf('{', signatureEnd);
+}
+
+function findFunctionEnd(text, start) {
+  const brace = findFunctionBodyStart(text, start);
+  if (brace < 0) return -1;
+  let depth = 0;
+  let quote = null;
+  for (let i = brace; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
+
 const liveStartCandidates = [
   source.lastIndexOf('function LiveSpreadsheetPage'),
   source.lastIndexOf('function LivePage'),
@@ -21,8 +71,11 @@ if (liveStart < 0) {
   process.exit(0);
 }
 
-const nextFunction = source.indexOf('\nfunction ', liveStart + 1);
-const liveEnd = nextFunction >= 0 ? nextFunction : source.length;
+const liveEnd = findFunctionEnd(source, liveStart);
+if (liveEnd < 0) {
+  console.log('Could not determine Live Game component boundary; skipping realtime edit patch.');
+  process.exit(0);
+}
 const section = source.slice(liveStart, liveEnd);
 const localStart = section.indexOf('const updateLiveRow = ');
 if (localStart < 0) {
@@ -53,7 +106,25 @@ if (end < 0) {
   process.exit(0);
 }
 
-const replacement = `const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {\n    const actualIndex = live.length - 1 - displayIndex;\n    const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);\n    const recalculated = recalculateLiveGains(nextLive, startingYardLine);\n    const edited = recalculated[actualIndex];\n    setData(current => ({ ...current, live: recalculated }));\n    if (!edited || !data.activeGameId) return;\n    void updateLivePlayByNumber(data.activeGameId, Number(edited.playNo) || actualIndex + 1, edited)\n      .then(async saved => {\n        if (!saved) return;\n        const persisted = livePlayToStandard(saved);\n        setData(current => ({ ...current, live: current.live.map(play => Number(play.playNo) === Number(persisted.playNo) ? persisted : play) }));\n      })\n      .catch(error => {\n        console.error('Could not save edited live snap:', error);\n        toast.notify('Edit was NOT saved to Supabase.');\n      });\n  };\n  // ${marker}`;
+const replacement = `const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {
+    const actualIndex = live.length - 1 - displayIndex;
+    const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);
+    const recalculated = recalculateLiveGains(nextLive, startingYardLine);
+    const edited = recalculated[actualIndex];
+    setData({ ...data, live: recalculated });
+    if (!edited || !data.activeGameId) return;
+    void updateLivePlayByNumber(data.activeGameId, Number(edited.playNo) || actualIndex + 1, edited)
+      .then(async saved => {
+        if (!saved) return;
+        const persisted = livePlayToStandard(saved);
+        setData({ ...data, live: data.live.map(play => Number(play.playNo) === Number(persisted.playNo) ? persisted : play) });
+      })
+      .catch(error => {
+        console.error('Could not save edited live snap:', error);
+        toast.notify('Edit was NOT saved to Supabase.');
+      });
+  };
+  // ${marker}`;
 
 source = source.slice(0, start) + replacement + source.slice(end);
 fs.writeFileSync(appPath, source);
