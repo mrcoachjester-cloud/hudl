@@ -126,6 +126,15 @@ if (asyncMatches?.length) {
   totalRemoved += asyncMatches.length;
 }
 
+// A transformer can also leave `async` immediately in front of the module's
+// default export. That is invalid syntax and is not an async function.
+const asyncDefaultExportPattern = /\basync\s+(export\s+default\s+App\s*;)/g;
+const asyncDefaultExports = source.match(asyncDefaultExportPattern);
+if (asyncDefaultExports?.length) {
+  source = source.replace(asyncDefaultExportPattern, '$1');
+  totalRemoved += asyncDefaultExports.length;
+}
+
 // A duplicated App export is a separate syntax error even after duplicate
 // function declarations are removed. Retain only the final/default export.
 const defaultAppExports = [...source.matchAll(/export\s+default\s+App\s*;/g)];
