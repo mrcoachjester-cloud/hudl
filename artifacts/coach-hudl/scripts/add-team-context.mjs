@@ -20,7 +20,6 @@ if (!source.includes(teamDataImport)) {
   source = source.replace(footballDataImport, match => `${match}\n${teamDataImport}`);
 }
 
-// Support both the older formatted Dataset field and the current formatting.
 const datasetField = /  activeGameId: string;\n  (?:activeTeam\?: string;\n  )?gameData\?: Record<string, \{ scouting: Play\[\]; live: Play\[\] \}>;|  activeGameId: string;\n  (?:activeTeam\?: string;\n  )?gameData\?: Record<string, \{ scouting: Play\[\]; live: Play\[\] \}> ;/;
 if (!source.includes('  activeTeam?: string;')) {
   if (!datasetField.test(source)) throw new Error('Team context patch could not find Dataset team field');
@@ -35,7 +34,7 @@ replaceOnce(
 
 replaceOnce(
   "  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];\n\n  const seasons =",
-  "  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];\n  const [teamOptions, setTeamOptions] = useState<string[]>([]);\n  const activeTeam = activeGame?.opponent ?? data.activeTeam ?? '';\n\n  const seasons =",
+  "  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];\n  const [teamOptions, setTeamOptions] = useState<string[]>([]);\n  const activeTeam = data.activeTeam ?? activeGame?.opponent ?? '';\n\n  const seasons =",
   'AppShell team state'
 );
 
