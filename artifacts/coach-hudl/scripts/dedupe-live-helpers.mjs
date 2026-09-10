@@ -95,8 +95,6 @@ totalRemoved += removeDuplicateSimpleDeclarations('emptyDataset', /const\s+empty
 totalRemoved += removeDuplicateSimpleDeclarations('headerAliases', /const\s+headerAliases\s*:\s*Record<keyof Play, string\[\]>\s*=\s*\{/g, '};');
 
 // Clean every function that has appeared more than once in the generated app.
-// Keep the first copy and remove subsequent copies. This is intentionally
-// idempotent: once the source has one declaration, the pass does nothing.
 const duplicateFunctionNames = [
   'num', 'normalizeOdk', 'normalizeYardLine', 'yardLineToFieldPosition',
   'calculateGnls', 'formatGnls', 'deriveLiveGains', 'recalculateLiveGains',
@@ -116,6 +114,16 @@ const malformedReports = /\n:\s*\{ data:\s*Dataset \}\)\s*\{/g;
 if (malformedReports.test(source)) {
   source = source.replace(malformedReports, '\nfunction ReportsPage({ data }: { data: Dataset }) {');
   totalRemoved++;
+}
+
+// Some historical build transformers inserted the async keyword repeatedly
+// when patching the same Live Game callback. A sequence such as
+// `async async async` is never valid TypeScript; collapse it to one keyword.
+const duplicateAsyncPattern = /\basync(?:\s+async)+\b/g;
+const asyncMatches = source.match(duplicateAsyncPattern);
+if (asyncMatches?.length) {
+  source = source.replace(duplicateAsyncPattern, 'async');
+  totalRemoved += asyncMatches.length;
 }
 
 // A duplicated App export is a separate syntax error even after duplicate
