@@ -19,8 +19,25 @@ if (!source.includes("import { isSupabaseConfigured, supabase } from './lib/supa
   source = source.replace("import { isSupabaseConfigured } from './lib/supabase';", "import { isSupabaseConfigured, supabase } from './lib/supabase';");
 }
 
+function findMatchingParen(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIndex; i < text.length; i++) {
+    const c = text[i];
+    if (quote) { if (c === '\\') i++; else if (c === quote) quote = null; continue; }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
 function findFunctionEnd(text, start) {
-  const brace = text.indexOf('{', start);
+  const openParen = text.indexOf('(', start);
+  if (openParen < 0) return -1;
+  const closeParen = findMatchingParen(text, openParen);
+  if (closeParen < 0) return -1;
+  const brace = text.indexOf('{', closeParen);
   if (brace < 0) return -1;
   let depth = 0;
   let quote = null;
@@ -39,9 +56,10 @@ if (!matches.length) throw new Error('Could not find Live Game component');
 
 for (let n = matches.length - 1; n >= 0; n--) {
   const functionStart = matches[n].index;
+  const openParen = source.indexOf('(', functionStart);
+  const signatureClose = findMatchingParen(source, openParen);
   const functionEnd = findFunctionEnd(source, functionStart);
-  const signatureClose = source.indexOf(')', functionStart);
-  if (signatureClose < 0 || functionEnd < 0) throw new Error('Could not determine Live Game component boundary');
+  if (openParen < 0 || signatureClose < 0 || functionEnd < 0) throw new Error('Could not determine Live Game component boundary');
   const signature = source.slice(functionStart, signatureClose + 1);
   if (!/\{[^}]*\bdata\b[^}]*\bsetData\b[^}]*\}/.test(signature)) continue;
 
@@ -56,8 +74,8 @@ for (let n = matches.length - 1; n >= 0; n--) {
   if (existingV3 >= 0 && existingDraftMarker > existingV3) {
     section = section.slice(0, existingV3) + effect.trimStart() + '\n' + section.slice(existingDraftMarker);
   } else {
-    const bodyStart = source.indexOf('{', signatureClose);
-    const relativeBody = bodyStart - functionStart + 1;
+    const bodyOpen = source.indexOf('{', signatureClose);
+    const relativeBody = bodyOpen - functionStart + 1;
     section = section.slice(0, relativeBody) + effect + section.slice(relativeBody);
   }
 
@@ -71,8 +89,6 @@ for (let n = matches.length - 1; n >= 0; n--) {
   break;
 }
 
-// fix-team-data-room intentionally removes the old global Game selector. Restore it
-// here so Team + Game remain available without changing Live Game behavior.
 if (!source.includes('data-testid="select-global-game"')) {
   const teamSelectorEnd = /(<select\n\s*id="global-team"[\s\S]*?<\/select>\n\s*<\/div>)/;
   if (teamSelectorEnd.test(source)) {
