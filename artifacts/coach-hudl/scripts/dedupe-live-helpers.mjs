@@ -87,14 +87,12 @@ function removeDuplicateSimpleDeclarations(name, pattern, endToken) {
 
 let totalRemoved = 0;
 
-// Duplicate top-level constants are build-breaking and must be cleaned too.
 totalRemoved += removeDuplicateSimpleDeclarations('STORAGE_KEY', /const\s+STORAGE_KEY\s*=\s*['"]coach-hudl-datasets-v2['"]\s*;/g, ';');
 totalRemoved += removeDuplicateSimpleDeclarations('demoSchedule', /const\s+demoSchedule\s*:\s*ScheduleGame\[\]\s*=\s*\[/g, '];');
 totalRemoved += removeDuplicateSimpleDeclarations('demoScouting', /const\s+demoScouting\s*:\s*Play\[\]\s*=\s*\[/g, '];');
 totalRemoved += removeDuplicateSimpleDeclarations('emptyDataset', /const\s+emptyDataset\s*:\s*Dataset\s*=\s*\{/g, '};');
 totalRemoved += removeDuplicateSimpleDeclarations('headerAliases', /const\s+headerAliases\s*:\s*Record<keyof Play, string\[\]>\s*=\s*\{/g, '};');
 
-// Clean every function that has appeared more than once in the generated app.
 const duplicateFunctionNames = [
   'num', 'normalizeOdk', 'normalizeYardLine', 'yardLineToFieldPosition',
   'calculateGnls', 'formatGnls', 'deriveLiveGains', 'recalculateLiveGains',
@@ -117,9 +115,6 @@ if (malformedReports.test(source)) {
   totalRemoved++;
 }
 
-// Some historical build transformers inserted the async keyword repeatedly
-// when patching the same Live Game callback. A sequence such as
-// `async async async` is never valid TypeScript; collapse it to one keyword.
 const duplicateAsyncPattern = /\basync(?:\s+async)+\b/g;
 const asyncMatches = source.match(duplicateAsyncPattern);
 if (asyncMatches?.length) {
@@ -127,8 +122,6 @@ if (asyncMatches?.length) {
   totalRemoved += asyncMatches.length;
 }
 
-// A transformer can also leave `async` immediately in front of the module's
-// default export. That is invalid syntax and is not an async function.
 const asyncDefaultExportPattern = /\basync\s+(export\s+default\s+App\s*;)/g;
 const asyncDefaultExports = source.match(asyncDefaultExportPattern);
 if (asyncDefaultExports?.length) {
@@ -136,14 +129,28 @@ if (asyncDefaultExports?.length) {
   totalRemoved += asyncDefaultExports.length;
 }
 
-// A duplicated App export is a separate syntax error even after duplicate
-// function declarations are removed. Retain only the final/default export.
 const defaultAppExports = [...source.matchAll(/export\s+default\s+App\s*;/g)];
 if (defaultAppExports.length > 1) {
   for (let i = defaultAppExports.length - 2; i >= 0; i--) {
     const start = defaultAppExports[i].index;
     const end = start + defaultAppExports[i][0].length;
     source = source.slice(0, start) + source.slice(end);
+    totalRemoved++;
+  }
+}
+
+// add-live-reports historically generated a Reports route that referenced a
+// nonexistent `data` variable in the router scope. That compiles but crashes
+// the entire React app at runtime with `ReferenceError: data is not defined`.
+// Use the app's existing persisted dataset loader instead.
+const reportRoutePatterns = [
+  '<Route path="/reports"><ReportsHubPage data={data} /></Route>',
+  '<Route path="/reports"><LiveReportsPage data={data} /></Route>',
+];
+const reportRouteReplacement = '<Route path="/reports"><LiveReportsPage data={safeLoad()} /></Route>';
+for (const route of reportRoutePatterns) {
+  if (source.includes(route)) {
+    source = source.replace(route, reportRouteReplacement);
     totalRemoved++;
   }
 }
