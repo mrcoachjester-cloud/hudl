@@ -46,11 +46,17 @@ if (!functionMatches.length) throw new Error('Could not find Live Game component
 
 for (let m = functionMatches.length - 1; m >= 0; m--) {
   const functionStart = m.index;
+  const signatureClose = source.indexOf(')', functionStart);
   const functionEnd = findFunctionEnd(source, functionStart);
-  if (functionEnd < 0) throw new Error('Could not determine Live Game component boundary');
+  if (signatureClose < 0 || functionEnd < 0) throw new Error('Could not determine Live Game component boundary');
+  const signature = source.slice(functionStart, signatureClose + 1);
+
+  // The collaboration effect uses `data` and `setData`. Never inject it into a
+  // duplicate/legacy Live component whose signature does not own those bindings.
+  if (!/\{[^}]*\bdata\b[^}]*\bsetData\b[^}]*\}/.test(signature)) continue;
+
   let section = source.slice(functionStart, functionEnd);
   if (!section.includes(effectMarker)) {
-    const signatureClose = source.indexOf(')', functionStart);
     const bodyStart = source.indexOf('{', signatureClose);
     const relativeBody = bodyStart - functionStart + 1;
     section = section.slice(0, relativeBody) + effect + section.slice(relativeBody);
@@ -59,4 +65,4 @@ for (let m = functionMatches.length - 1; m >= 0; m--) {
 }
 
 fs.writeFileSync(appPath, source);
-console.log('Live collaboration realtime sync installed in every Live Game component.');
+console.log('Live collaboration realtime sync installed only in Live components that own data/setData scope.');
