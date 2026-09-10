@@ -5,8 +5,27 @@ const appPath = path.join(path.resolve(process.cwd()), 'src', 'App.tsx');
 if (!fs.existsSync(appPath)) process.exit(0);
 let source = fs.readFileSync(appPath, 'utf8');
 
+function findMatchingParen(text, openIndex) {
+  let depth = 0;
+  let quote = null;
+  for (let i = openIndex; i < text.length; i++) {
+    const c = text[i];
+    if (quote) {
+      if (c === '\\') i++;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { quote = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
 function findFunctionBodyStart(text, start) {
-  const signatureEnd = text.indexOf(')', start);
+  const openParen = text.indexOf('(', start);
+  if (openParen < 0) return -1;
+  const signatureEnd = findMatchingParen(text, openParen);
   if (signatureEnd < 0) return -1;
   return text.indexOf('{', signatureEnd);
 }
@@ -88,8 +107,6 @@ if (defaultAppExports.length > 1) {
   for (let i = defaultAppExports.length - 2; i >= 0; i--) { const start = defaultAppExports[i].index; const end = start + defaultAppExports[i][0].length; source = source.slice(0, start) + source.slice(end); totalRemoved++; }
 }
 
-// The Router owns the live `data` state. Keep report routes bound to that
-// state rather than replacing the prop with safeLoad() or a global variable.
 const reportRouteDataPattern = /(<Route\s+path=["']\/reports["'][\s\S]{0,1600}?)data=\{safeLoad\(\)\}/g;
 const beforeReportRoutes = source;
 source = source.replace(reportRouteDataPattern, '$1data={data}');
@@ -100,17 +117,10 @@ const beforeReportComponents = source;
 source = source.replace(reportComponentDataPattern, '$1data={data}');
 if (source !== beforeReportComponents) totalRemoved++;
 
-// Remove obsolete module-level fallbacks. Do not create a second `data`
-// binding here: Router already provides the correctly scoped state variable.
 const moduleDataFallback = /(^|\n)\s*(?:const|let|var)\s+data\s*=\s*safeLoad\(\);\s*(?=\n|$)/g;
 const beforeFallbackCleanup = source;
 source = source.replace(moduleDataFallback, '$1');
 if (source !== beforeFallbackCleanup) totalRemoved++;
-
-// Never use globalThis.data as a compatibility shim. In an ES module a bare
-// identifier `data` does not resolve through globalThis.data, so that approach
-// only hides the real source problem. Any generated report reference is fixed
-// at the Router call site above, where `data` is actually in scope.
 
 fs.writeFileSync(appPath, source);
 console.log(`Generated declaration cleanup complete${totalRemoved ? `; removed ${totalRemoved} duplicate declaration(s)` : ''}.`);
