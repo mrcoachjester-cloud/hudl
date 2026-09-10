@@ -88,18 +88,24 @@ if (defaultAppExports.length > 1) {
   for (let i = defaultAppExports.length - 2; i >= 0; i--) { const start = defaultAppExports[i].index; const end = start + defaultAppExports[i][0].length; source = source.slice(0, start) + source.slice(end); totalRemoved++; }
 }
 
-// Normalize every generated Reports route that passes the free variable `data`.
-// Different transformers have emitted different whitespace and component forms.
+// Reports must never reference a free `data` variable. Normalize every route
+// variant emitted by the earlier report transformers to the persisted dataset.
 const reportRoutePattern = /<Route\s+path=["']\/reports["'][^>]*>\s*<(?:ReportsHubPage|LiveReportsPage)\b[^>]*data=\{data\}[^>]*\/?>\s*<\/Route>/g;
 const beforeReports = source;
 source = source.replace(reportRoutePattern, '<Route path="/reports"><LiveReportsPage data={safeLoad()} /></Route>');
 if (source !== beforeReports) totalRemoved++;
 
-// Last-resort targeted replacement for any remaining reports-route data reference.
-const reportsDataReference = /(<Route\s+path=["']\/reports["'][\s\S]{0,500}?)data=\{data\}/g;
+const reportsDataReference = /(<Route\s+path=["']\/reports["'][\s\S]{0,1000}?)data=\{data\}/g;
 const beforeReferenceFix = source;
 source = source.replace(reportsDataReference, '$1data={safeLoad()}');
 if (source !== beforeReferenceFix) totalRemoved++;
+
+// Final safety net: if any exact report route still contains the free variable,
+// replace only that prop rather than touching unrelated component data props.
+const exactFreeData = /(<(?:ReportsHubPage|LiveReportsPage)\b[^>]{0,1000}?)data=\{data\}/g;
+const beforeExactFix = source;
+source = source.replace(exactFreeData, '$1data={safeLoad()}');
+if (source !== beforeExactFix) totalRemoved++;
 
 fs.writeFileSync(appPath, source);
 console.log(`Generated declaration cleanup complete${totalRemoved ? `; removed ${totalRemoved} duplicate declaration(s)` : ''}.`);
