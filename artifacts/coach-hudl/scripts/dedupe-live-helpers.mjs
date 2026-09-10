@@ -100,19 +100,28 @@ const beforeReportComponents = source;
 source = source.replace(reportComponentDataPattern, '$1data={safeLoad()}');
 if (source !== beforeReportComponents) totalRemoved++;
 
-// Remove any module-level fallback from an earlier transformer. A module-level
-// `const data = safeLoad()` creates a temporal-dead-zone failure when a generated
-// reference to `data` appears earlier in the module. The correct fix is at the
-// call site, not by introducing another global binding.
-const moduleDataFallback = /(^|\n)\s*const\s+data\s*=\s*safeLoad\(\);\s*(?=\n|$)/g;
+// Remove module-level fallbacks from earlier transformers. A module-level
+// `const data = safeLoad()` at the end of the module can leave generated code
+// executing before the binding is initialized. We instead place one `let data`
+// immediately after the hoisted safeLoad function declaration, before any
+// component/router initialization can execute.
+const moduleDataFallback = /(^|\n)\s*(?:const|let|var)\s+data\s*=\s*safeLoad\(\);\s*(?=\n|$)/g;
 const beforeFallbackCleanup = source;
 source = source.replace(moduleDataFallback, '$1');
 if (source !== beforeFallbackCleanup) totalRemoved++;
 
-// Final broad guard for generated JSX route references. This is deliberately
-// limited to JSX props whose value is exactly the free identifier `data`.
-// Existing component-local `data` variables remain valid because this only
-// changes JSX prop expressions in the generated App module.
+const safeLoadMatch = /function\s+safeLoad\s*\([^)]*\)\s*\{/;
+const safeLoadStartMatch = source.match(safeLoadMatch);
+if (safeLoadStartMatch && safeLoadStartMatch.index != null) {
+  const safeLoadEnd = findFunctionEnd(source, safeLoadStartMatch.index);
+  if (safeLoadEnd >= 0 && !/\n(?:const|let|var)\s+data\s*=\s*safeLoad\(\);/.test(source.slice(safeLoadEnd, safeLoadEnd + 80))) {
+    source = source.slice(0, safeLoadEnd) + '\nlet data = safeLoad();' + source.slice(safeLoadEnd);
+  }
+}
+
+// Final broad guard for generated JSX prop references. Existing component-local
+// `data` variables remain valid because this only changes JSX expressions whose
+// value is exactly the identifier `data`.
 const anyDataProp = /data=\{data\}/g;
 const beforeAnyDataProp = source;
 source = source.replace(anyDataProp, 'data={safeLoad()}');
