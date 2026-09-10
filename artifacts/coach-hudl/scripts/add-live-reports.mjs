@@ -26,9 +26,20 @@ if (!source.includes(importLine)) {
   source = source.slice(0, insertAt) + `\n${importLine}` + source.slice(insertAt);
 }
 
+// Always pass the persisted dataset directly. Do not create a module-level
+// `const data` fallback: another transform may already declare that symbol,
+// which would make the production bundle fail to compile.
 const route = '<Route path="/reports"><ReportsHubPage data={data} /></Route>';
-const replacement = '<Route path="/reports"><LiveReportsPage data={data} /></Route>';
-if (source.includes(route)) source = source.replace(route, replacement);
+const legacyReplacement = '<Route path="/reports"><LiveReportsPage data={safeLoad()} /></Route>';
+if (source.includes(route)) source = source.replace(route, legacyReplacement);
+
+// Normalize any other generated Reports route that still references a free
+// `data` identifier. This is intentionally limited to /reports and the reports
+// components so unrelated component props are untouched.
+const reportRouteDataPattern = /(<Route\s+path=["']\/reports["'][\s\S]{0,1200}?)data=\{data\}/g;
+source = source.replace(reportRouteDataPattern, '$1data={safeLoad()}');
+const reportComponentDataPattern = /(<(?:ReportsHubPage|LiveReportsPage)\b[^>]{0,1200}?)data=\{data\}/g;
+source = source.replace(reportComponentDataPattern, '$1data={safeLoad()}');
 
 // Reports need the same scouting board used by Overview. The scouting chart is
 // from the opponent's perspective (Paschal O = Paschal offense), while Live
@@ -91,12 +102,9 @@ if (source.includes(oldLoader)) {
   throw new Error('Reports patch: Supabase play loader block not found');
 }
 
-// A few historical transforms emitted a Reports route using a free `data`
-// identifier. Keep a module-level fallback so those generated references can
-// never crash the application before React mounts.
-if (!/\bconst\s+data\s*=\s*safeLoad\(\);/.test(source)) {
-  source = source.replace(/\nfunction\s+saveDataset\s*\(/, '\nconst data = safeLoad();\n\nfunction saveDataset(');
-}
+// Never add a module-level `const data = safeLoad()` here. Reports routes are
+// fixed at their call site instead, avoiding collisions with any existing data
+// declaration produced by another build transform.
 
 fs.writeFileSync(appPath, source);
 
