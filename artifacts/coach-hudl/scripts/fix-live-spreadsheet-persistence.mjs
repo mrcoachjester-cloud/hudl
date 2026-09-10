@@ -5,15 +5,32 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const appPath = path.resolve(here, '../src/App.tsx');
 let text = fs.readFileSync(appPath, 'utf8');
-const start = text.indexOf('function LiveSpreadsheetPage');
-const end = text.indexOf('function ReportsHubPage', start);
 
-if (start < 0 || end < 0) {
-  console.log('LiveSpreadsheetPage marker not present; skipping legacy persistence patch.');
+// The canonical source currently calls this component LivePage. Some later
+// transforms rename/replace it with LiveSpreadsheetPage. Patch whichever exists
+// so persistence is applied before the realtime collaboration transform runs.
+const componentNames = ['LiveSpreadsheetPage', 'LivePage'];
+let componentName = componentNames.find(name => text.includes(`function ${name}`));
+if (!componentName) {
+  console.log('Live Game component marker not present; skipping persistence patch.');
   process.exit(0);
 }
 
+const start = text.indexOf(`function ${componentName}`);
+const nextFunction = text.indexOf('\nfunction ', start + 10);
+const end = nextFunction > start ? nextFunction : text.length;
 let section = text.slice(start, end);
+
+// Make sure the helper import is present. install-live-collaboration also
+// enforces this later, but persistence must be able to run independently.
+const footballImportRegex = /import\s*\{([\s\S]*?)\}\s*from\s*['\"]\.\/lib\/footballData['\"];?/m;
+const footballImport = text.match(footballImportRegex);
+if (footballImport) {
+  const required = ['createLivePlay', 'deleteLivePlayByNumber', 'updateLivePlayByNumber'];
+  let names = footballImport[1].split(',').map(item => item.trim()).filter(Boolean);
+  for (const name of required) if (!names.includes(name)) names.push(name);
+  text = text.replace(footballImportRegex, `import { ${names.join(', ')} } from './lib/footballData';`);
+}
 
 const oldAdd = `    setData(next);\n    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', result: '' }));\n    toast.notify(\`Live snap added · GN/LS \${formatGnls(calculatedGnls)}\`);`;
 const newAdd = `    setData(next);\n    void createLivePlay(data.activeGameId, next.live[next.live.length - 1]).catch(error => {\n      console.error('Could not save live snap:', error);\n      toast.notify('Snap added locally, but Supabase save failed');\n    });\n    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', result: '' }));\n    toast.notify(\`Live snap added · GN/LS \${formatGnls(calculatedGnls)}\`);`;
@@ -33,4 +50,4 @@ section = section.replace(oldRemove, newRemove);
 
 text = text.slice(0, start) + section + text.slice(end);
 fs.writeFileSync(appPath, text);
-console.log('Live spreadsheet Supabase persistence patch applied using the current footballData helpers.');
+console.log(`Live spreadsheet Supabase persistence patch applied to ${componentName}.`);
