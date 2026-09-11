@@ -14,9 +14,11 @@ if (liveStart >= 0) {
   const yardFieldStart = source.indexOf('const yardLineField =', fieldStart);
 
   if (fieldStart >= 0 && yardFieldStart > fieldStart) {
-    // Avoid JSX template literals entirely here. They were being double-escaped
-    // by the build-time transformer chain, producing invalid \` and \\" in App.tsx.
-    const canonicalField = 'const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={\'live-\' + key}>{label}</label>{options ? <select id={\'live-\' + key} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'select-live-\' + key}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={\'live-\' + key} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'input-live-\' + key} />}</div>;\n';
+    // Build the helper without JSX template literals, then explicitly normalize
+    // escaped attribute quotes inside this generated helper only. This avoids
+    // touching unrelated application strings or JSX outside Live Game.
+    let canonicalField = 'const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={\'live-\' + key}>{label}</label>{options ? <select id={\'live-\' + key} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'select-live-\' + key}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={\'live-\' + key} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'input-live-\' + key} />}</div>;\n';
+    canonicalField = canonicalField.replace(/\\"/g, '"');
     source = source.slice(0, fieldStart) + canonicalField + source.slice(yardFieldStart);
     console.log('Repaired generated Live Game field helper from canonical JSX.');
   }
