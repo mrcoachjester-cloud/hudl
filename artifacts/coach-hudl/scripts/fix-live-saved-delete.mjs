@@ -5,10 +5,10 @@ const appPath = path.join(path.resolve(process.cwd()), 'src', 'App.tsx');
 if (!fs.existsSync(appPath)) process.exit(0);
 let source = fs.readFileSync(appPath, 'utf8');
 
-// set-result-vocabulary.mjs generates the Live Game editable-field JSX from a
-// JavaScript string. Repair escaped JSX attribute quotes before Vite parses the
-// generated App.tsx. Without this, Vite sees className=\"...\" as malformed JSX.
-source = source.replace(/=\\\"([^\"]*)\\\"/g, '=\"$1\"');
+// set-result-vocabulary.mjs builds Live Game JSX inside JavaScript strings.
+// Remove literal backslashes immediately before quote characters so generated
+// App.tsx contains normal JSX attributes before Vite parses it.
+source = source.replace(/\\(["'])/g, '$1');
 
 const start = source.indexOf('  const removeLiveRow = (displayIndex: number) => {');
 if (start < 0) throw new Error('Could not find Live Game removeLiveRow implementation');
@@ -29,4 +29,4 @@ const replacement = `  const removeLiveRow = (displayIndex: number) => {
 
 source = source.slice(0, start) + replacement + source.slice(end + 4);
 fs.writeFileSync(appPath, source);
-console.log('Live Game saved-play delete now removes the shared Supabase play, and generated JSX attribute escaping is repaired before Vite.');
+console.log('Live Game saved-play delete now removes the shared Supabase play, and generated JSX quote escaping is repaired before Vite.');
