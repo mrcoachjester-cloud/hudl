@@ -6,35 +6,43 @@ if (!fs.existsSync(appPath)) process.exit(0);
 
 let source = fs.readFileSync(appPath, 'utf8');
 
-// FINAL pre-Vite pass. Keep the existing application architecture intact and
-// repair only the legacy generated Live Game field helper.
+// The committed App.tsx already contains valid JSX. The build-time transform
+// chain is creating an invalid copy of the Live Game field helper. Replace only
+// that generated helper with a literal, valid JSX implementation.
 const liveStart = source.indexOf('function LiveSpreadsheetPage');
 if (liveStart >= 0) {
   const fieldStart = source.indexOf('const field = (key: keyof Play, label: string, options?: string[]) =>', liveStart);
   const yardFieldStart = source.indexOf('const yardLineField =', fieldStart);
 
   if (fieldStart >= 0 && yardFieldStart > fieldStart) {
-    // Build the helper without JSX template literals, then explicitly normalize
-    // escaped attribute quotes inside this generated helper only. This avoids
-    // touching unrelated application strings or JSX outside Live Game.
-    let canonicalField = 'const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={\'live-\' + key}>{label}</label>{options ? <select id={\'live-\' + key} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'select-live-\' + key}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={\'live-\' + key} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={\'input-live-\' + key} />}</div>;\n';
-    canonicalField = canonicalField.replace(/\\"/g, '"');
+    const canonicalField = [
+      'const field = (key: keyof Play, label: string, options?: string[]) =>',
+      '  options ? (',
+      '    <div className="field">',
+      '      <label htmlFor={"live-" + key}>{label}</label>',
+      '      <select id={"live-" + key} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={"select-live-" + key}>',
+      '        {options.map(option => <option key={option}>{option}</option>)}',
+      '      </select>',
+      '    </div>',
+      '  ) : (',
+      '    <div className="field">',
+      '      <label htmlFor={"live-" + key}>{label}</label>',
+      '      <input id={"live-" + key} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={"input-live-" + key} />',
+      '    </div>',
+      '  );',
+      '',
+    ].join('\n');
     source = source.slice(0, fieldStart) + canonicalField + source.slice(yardFieldStart);
-    console.log('Repaired generated Live Game field helper from canonical JSX.');
+    console.log('Rebuilt generated Live Game field helper as explicit JSX.');
   }
 }
 
-// Catch the exact failure Vite/esbuild previously reported. Do not silently
-// continue if a literal backslash remains in a JSX attribute.
-const bad = [
-  /className=\\+["']/,
-  /htmlFor=\\+["']/,
-  /id=\\+["']/,
-  /data-testid=\\+["']/,
-];
-const failures = bad.filter(pattern => pattern.test(source));
-if (failures.length) {
-  throw new Error(`Generated App.tsx still contains malformed JSX attribute escaping (${failures.length} pattern(s))`);
+// Fail closed if this exact helper still contains escaped JSX quotes.
+const helperStart = source.indexOf('const field = (key: keyof Play, label: string, options?: string[]) =>');
+const helperEnd = source.indexOf('const yardLineField =', helperStart);
+const helper = helperStart >= 0 && helperEnd > helperStart ? source.slice(helperStart, helperEnd) : '';
+if (/\\["']/.test(helper)) {
+  throw new Error('Generated Live Game field helper still contains escaped JSX quotes');
 }
 
 fs.writeFileSync(appPath, source);
