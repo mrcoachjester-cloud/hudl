@@ -6,10 +6,9 @@ if (!fs.existsSync(appPath)) process.exit(0);
 let source = fs.readFileSync(appPath, 'utf8');
 
 // set-result-vocabulary.mjs builds Live Game JSX inside JavaScript strings.
-// Remove ALL literal backslashes immediately before quote characters so generated
-// App.tsx contains normal JSX attributes before Vite parses it. The generator can
-// leave two or more backslashes, so a single-backslash replacement is insufficient.
-source = source.replace(/\\+(["'])/g, '$1');
+// Normalize every literal escape that can survive into the generated JSX,
+// including quotes, backticks, and dollar signs used by JSX template literals.
+source = source.replace(/\\+(["'`$])/g, '$1');
 
 const start = source.indexOf('  const removeLiveRow = (displayIndex: number) => {');
 if (start < 0) throw new Error('Could not find Live Game removeLiveRow implementation');
@@ -30,4 +29,4 @@ const replacement = `  const removeLiveRow = (displayIndex: number) => {
 
 source = source.slice(0, start) + replacement + source.slice(end + 4);
 fs.writeFileSync(appPath, source);
-console.log('Live Game saved-play delete now removes the shared Supabase play, and generated JSX quote escaping is repaired before Vite.');
+console.log('Live Game saved-play delete now removes the shared Supabase play, and generated JSX escapes are normalized before Vite.');
