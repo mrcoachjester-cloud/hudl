@@ -17,6 +17,13 @@ if (source.includes(footballDataImport) && !source.includes('import { createGame
 
 // ReportsHubPage must receive the Router's live Dataset state. Never introduce
 // a module-level `data`, safeLoad() prop, or global fallback here.
+const reportsImport = "import ReportsHubPage from './ReportsHubPage';\n";
+if (!source.includes("from './ReportsHubPage';")) {
+  const anchor = "import { isSupabaseConfigured } from './lib/supabase';\n";
+  if (source.includes(anchor)) source = source.replace(anchor, anchor + reportsImport);
+  else source = reportsImport + source;
+}
+
 source = source.replace("import LiveReportsPage from './ReportsHubPage';\n", '');
 source = source.replace(
   '<Route path="/reports"><LiveReportsPage data={safeLoad()} /></Route>',
@@ -85,12 +92,4 @@ if (source.includes(oldLoader)) {
 
 fs.writeFileSync(appPath, source);
 
-if (fs.existsSync(reportsPath)) {
-  let reports = fs.readFileSync(reportsPath, 'utf8');
-  const oldPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='D'), current = live.filter(p=>odk(p.odk)==='D');";
-  const newPerspective = "const scout = scouting.filter(p=>odk(p.odk)==='O'), current = live.filter(p=>odk(p.odk)==='D');";
-  if (reports.includes(oldPerspective)) reports = reports.replace(oldPerspective, newPerspective);
-  fs.writeFileSync(reportsPath, reports);
-}
-
-console.log('Live reports wired to Router state and Supabase scouting with opponent-perspective O/D mapping');
+console.log('Live reports wired to Router state and Supabase scouting with our-perspective O/D mapping');
