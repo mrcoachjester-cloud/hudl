@@ -6,9 +6,10 @@ if (!fs.existsSync(appPath)) process.exit(0);
 let source = fs.readFileSync(appPath, 'utf8');
 
 // set-result-vocabulary.mjs builds Live Game JSX inside JavaScript strings.
-// Remove literal backslashes immediately before quote characters so generated
-// App.tsx contains normal JSX attributes before Vite parses it.
-source = source.replace(/\\(["'])/g, '$1');
+// Remove ALL literal backslashes immediately before quote characters so generated
+// App.tsx contains normal JSX attributes before Vite parses it. The generator can
+// leave two or more backslashes, so a single-backslash replacement is insufficient.
+source = source.replace(/\\+(["'])/g, '$1');
 
 const start = source.indexOf('  const removeLiveRow = (displayIndex: number) => {');
 if (start < 0) throw new Error('Could not find Live Game removeLiveRow implementation');
