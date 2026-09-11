@@ -1,0 +1,111 @@
+name: Apply game hydration source fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix-source:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update App.tsx source
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path('artifacts/coach-hudl/src/App.tsx')
+          text = path.read_text()
+
+          old = """        let livePlays: Play[] = [];
+          let scoutingPlays: Play[] = [];
+
+          try {
+            if (activeGameId) {
+              const remoteLive = await getLivePlays(activeGameId);
+              if (remoteLive.length > 0) {
+                livePlays = remoteLive.map(livePlayToStandard);
+              }
+            }
+          } catch (e) {
+            console.warn('Could not fetch remote live plays:', e);
+          }
+"""
+
+          new = """        let livePlays: Play[] = [];
+          let scoutingPlays: Play[] = [];
+          const remoteGameData: Record<string, { scouting: Play[]; live: Play[] }> = {};
+
+          try {
+            const results = await Promise.all(
+              games.map(async game => {
+                try {
+                  const remoteLive = await getLivePlays(game.id);
+                  return [game.id, { scouting: [], live: remoteLive.map(livePlayToStandard) }] as const;
+                } catch (e) {
+                  console.warn(`Could not fetch live plays for game ${game.id}:`, e);
+                  return [game.id, { scouting: [], live: [] }] as const;
+                }
+              }),
+            );
+
+            results.forEach(([gameId, value]) => {
+              remoteGameData[gameId] = value;
+            });
+
+            if (activeGameId && remoteGameData[activeGameId]) {
+              livePlays = remoteGameData[activeGameId].live;
+              scoutingPlays = remoteGameData[activeGameId].scouting;
+            }
+          } catch (e) {
+            console.warn('Could not fetch remote live plays:', e);
+          }
+"""
+
+          if old not in text:
+              raise SystemExit('Expected Supabase live-play hydration source block was not found.')
+          text = text.replace(old, new, 1)
+
+          old_merge = """          const gameData = {
+            ...(current.gameData || {}),
+            [activeGameId]: {
+              scouting: current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting),
+              live: livePlays.length ? livePlays : current.live,
+            },
+          };
+"""
+
+          new_merge = """          const gameData = {
+            ...(current.gameData || {}),
+            ...remoteGameData,
+            [activeGameId]: {
+              scouting: remoteGameData[activeGameId]?.scouting?.length
+                ? remoteGameData[activeGameId].scouting
+                : (current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting)),
+              live: remoteGameData[activeGameId]?.live ?? (livePlays.length ? livePlays : current.live),
+            },
+          };
+"""
+
+          if old_merge not in text:
+              raise SystemExit('Expected Supabase game-data merge source block was not found.')
+          text = text.replace(old_merge, new_merge, 1)
+
+          path.write_text(text)
+          print('Updated committed App.tsx source to hydrate live plays for every game.')
+          PY
+
+      - name: Commit source fix
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add artifacts/coach-hudl/src/App.tsx
+          git commit -m 'Fix game data hydration in source'
+          git push
