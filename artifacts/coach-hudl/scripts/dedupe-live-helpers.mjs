@@ -122,10 +122,11 @@ const beforeFallbackCleanup = source;
 source = source.replace(moduleDataFallback, '$1');
 if (source !== beforeFallbackCleanup) totalRemoved++;
 
-// FINAL JSX SANITIZER: set-result-vocabulary.mjs constructs JSX inside JavaScript
-// strings. This is intentionally the last transformation in the prebuild chain so
-// no later script can leave literal backslashes before JSX quote characters.
-source = source.replace(/\\+(["'])/g, '$1');
+// The committed App.tsx contains generated JSX from earlier build tooling.
+// Normalize only escaped quote characters here; do not touch regex/string escapes.
+const beforeQuoteNormalization = source;
+source = source.replaceAll('\\"', '"').replaceAll("\\'", "'");
+const normalizedQuotes = beforeQuoteNormalization === source ? 0 : 1;
 
 fs.writeFileSync(appPath, source);
-console.log(`Generated declaration cleanup complete${totalRemoved ? `; removed ${totalRemoved} duplicate declaration(s)` : ''}; final JSX quote escaping sanitized.`);
+console.log(`Generated declaration cleanup complete${totalRemoved ? `; removed ${totalRemoved} duplicate declaration(s)` : ''}; normalized escaped JSX quotes${normalizedQuotes ? '' : ' (none found)'}.`);
