@@ -14,8 +14,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Update App source
-        shell: python
         run: |
+          python3 - <<'PY'
           from pathlib import Path
 
           path = Path('artifacts/coach-hudl/src/App.tsx')
@@ -40,8 +40,8 @@ jobs:
         const normalizeOpponent = (value: string | null | undefined) =>
           (value ?? '').trim().toLowerCase();
 
-        // Hydrate every scheduled game once at startup. This makes game selection
-        // a local state switch instead of leaving non-active games empty.
+        // Hydrate every scheduled game once at startup so selecting a game
+        // switches to data already loaded from Supabase.
         const liveResults = await Promise.all(
           games.map(async game => {
             try {
@@ -63,8 +63,8 @@ jobs:
           }
         }
 
-        // Scouting sessions are opponent-based in older data. Paschal's session has
-        // no game_id, so fall back to a normalized opponent-name match.
+        // Older scouting sessions may not have game_id. Match those sessions
+        // to the scheduled opponent so games such as Paschal still populate.
         if (currentSeason?.id) {
           try {
             const scoutingSessions = await getScoutingSessions(currentSeason.id);
@@ -140,12 +140,14 @@ jobs:
               raise SystemExit('Expected gameData merge block was not found')
           source = source.replace(old_merge, new_merge, 1)
           path.write_text(source)
+          PY
 
       - name: Commit source fix and remove temporary workflow
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git rm .github/workflows/fix-game-selection-source.yml
+          git rm artifacts/coach-hudl/.game-selection-fix-trigger || true
           git add artifacts/coach-hudl/src/App.tsx
           git diff --cached --quiet || git commit -m "Fix Supabase game selection hydration"
           git push
