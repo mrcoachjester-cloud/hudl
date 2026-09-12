@@ -141,15 +141,25 @@ function normalizeOdk(value: string): string {
   if (['k', 'kick', 'kicking', 'special teams'].includes(normalized)) return 'K';
   return value.trim().toUpperCase();
 }
-function normalizeYardLine(value: string): string {
-  const normalized = value.trim().toUpperCase();
-  const match = normalized.match(/^(OWN|OPP|OPPONENT|OUR|O|A)?\s*(-?\d{1,3})\b/);
-  if (!match) return value.trim();
-  const yard = Number(match[2]);
-  if (Math.abs(yard) > 100) return value.trim();
-  const side = match[1] ?? '';
-  const signed = side === 'OWN' || side === 'OUR' || side === 'O' ? -Math.abs(yard) : side === 'OPP' || side === 'OPPONENT' || side === 'A' ? Math.abs(yard) : yard;
-  return String(signed);
+function normalizeYardLine(
+  value: number | string | null | undefined
+): number | null {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  const text = String(value).trim();
+
+  // Accept values such as "25", "OWN 25", "OPP 40", or "50"
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+
+  if (!match) {
+    return null;
+  }
+
+  const numberValue = Number(match[0]);
+
+  return Number.isFinite(numberValue) ? numberValue : null;
 }
 function yardLineToFieldPosition(value: string): number | null {
   const normalized = normalizeYardLine(value);
@@ -166,11 +176,14 @@ function calculateGnls(
   const previous = normalizeYardLine(previousYardLine);
   const current = normalizeYardLine(currentYardLine);
 
+  // Never allow NaN into the UI or database
   if (previous === null || current === null) {
     return 0;
   }
 
-  return current - previous;
+  const gain = current - previous;
+
+  return Number.isFinite(gain) ? gain : 0;
 }
 function formatGnls(value: number | null): string {
   if (value === null) return '—';
