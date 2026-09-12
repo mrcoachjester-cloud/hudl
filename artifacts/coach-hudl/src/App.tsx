@@ -159,10 +159,18 @@ function yardLineToFieldPosition(value: string): number | null {
   if (Math.abs(yard) > 100) return null;
   return yard < 0 ? -yard : 100 - yard;
 }
-function calculateGnls(previousYardLine: string, currentYardLine: string): number | null {
-  const previous = yardLineToFieldPosition(previousYardLine);
-  const current = yardLineToFieldPosition(currentYardLine);
-  return previous === null || current === null ? null : current - previous;
+function calculateGnls(
+  previousYardLine: number | string | null | undefined,
+  currentYardLine: number | string | null | undefined
+): number {
+  const previous = normalizeYardLine(previousYardLine);
+  const current = normalizeYardLine(currentYardLine);
+
+  if (previous === null || current === null) {
+    return 0;
+  }
+
+  return current - previous;
 }
 function formatGnls(value: number | null): string {
   if (value === null) return '—';
@@ -1017,8 +1025,10 @@ function LivePage({ data, setData }: { data: Dataset; setData: (data: Dataset) =
   const [startingYardLine, setStartingYardLine] = useState('-20');
   const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', result: '' }); const toast = useToast(); const fileRef = useRef<HTMLInputElement>(null);
   const update = (key: keyof Play, value: string) => setForm(current => ({ ...current, [key]: value }));
-  const previousYardLine = data.live.at(-1)?.yardLn || startingYardLine;
-  const normalizedFormYardLine = normalizeYardLine(form.yardLn);
+const previousYardLine =
+  previousPlay?.yard_line ??
+  liveGame?.starting_yard_line ??
+  startingYardLine;  const normalizedFormYardLine = normalizeYardLine(form.yardLn);
   const calculatedGnls = calculateGnls(previousYardLine, normalizedFormYardLine);
   const addPlay = () => {
     if (!form.yardLn.trim()) { toast.notify('Enter the yard line after the snap'); return; }
