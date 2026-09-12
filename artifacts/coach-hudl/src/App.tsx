@@ -240,27 +240,99 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     .filter(game => game.season === activeSeason)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const selectGame = (gameId: string) => {
-    if (!gameId || gameId === data.activeGameId) return;
-    const gameData = {
-      ...(data.gameData || {}),
-      [data.activeGameId]: { scouting: data.scouting, live: data.live },
+const selectGame = async (gameId: string) => {
+  if (!gameId || gameId === data.activeGameId) return;
+
+  const previousGameId = data.activeGameId;
+
+  // Preserve the currently visible data in the local cache.
+  const cachedGameData = {
+    ...(data.gameData || {}),
+    ...(previousGameId
+      ? {
+          [previousGameId]: {
+            scouting: data.scouting,
+            live: data.live,
+          },
+        }
+      : {}),
+  };
+
+  // Immediately switch games and clear stale rows from the previous game.
+  setData({
+    ...data,
+    activeGameId: gameId,
+    scouting: [],
+    live: [],
+    gameData: cachedGameData,
+  });
+
+  try {
+    // Always read the selected game's live data from Supabase.
+    const remoteLive = await getLivePlays(gameId);
+    const live = remoteLive.map(livePlayToStandard);
+
+    // Find the selected game's season.
+    const selectedGame = data.schedule.find(game => game.id === gameId);
+
+    let scouting: Play[] = [];
+
+    if (selectedGame) {
+      const season = await getSeasons();
+      const seasonRecord = season.find(
+        item => String(item.season_year) === String(selectedGame.season)
+      );
+
+      if (seasonRecord) {
+        const sessions = await getScoutingSessions(seasonRecord.id);
+
+        // Prefer a scouting session explicitly connected to this game.
+        const matchingSession =
+          sessions.find(session => session.game_id === gameId) ??
+          sessions.find(
+            session =>
+              session.opponent.trim().toLowerCase() ===
+              selectedGame.opponent.trim().toLowerCase()
+          );
+
+        if (matchingSession) {
+          const remoteScouting = await getScoutingPlays(
+            matchingSession.id
+          );
+
+          scouting = remoteScouting.map(scoutingPlayToStandard);
+        }
+      }
+    }
+
+    const nextGameData = {
+      ...cachedGameData,
+      [gameId]: {
+        scouting,
+        live,
+      },
     };
-    const targetPlays = gameData[gameId] ?? {
-      scouting: gameId === demoSchedule[0].id ? demoScouting : [],
-      live: [],
-    };
+
     setData({
       ...data,
       activeGameId: gameId,
-      scouting: targetPlays.scouting,
-      live: targetPlays.live,
-      gameData: {
-        ...gameData,
-        [gameId]: targetPlays,
-      },
+      scouting,
+      live,
+      gameData: nextGameData,
     });
-  };
+  } catch (error) {
+    console.error('Could not load selected game from Supabase:', error);
+
+    // Keep the selected game active, but do not display another game's data.
+    setData({
+      ...data,
+      activeGameId: gameId,
+      scouting: [],
+      live: [],
+      gameData: cachedGameData,
+    });
+  }
+};
 
   const selectSeason = (season: string) => {
     const firstGame =
