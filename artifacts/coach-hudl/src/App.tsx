@@ -97,11 +97,11 @@ function safeLoad(): Dataset {
     const gameData: Record<string, { scouting: Play[]; live: Play[] }> =
       parsed.gameData && typeof parsed.gameData === 'object'
         ? parsed.gameData
-        : { [demoSchedule[0].id]: { scouting: Array.isArray(parsed.scouting) && parsed.scouting.length ? parsed.scouting : demoScouting, live: Array.isArray(parsed.live) ? parsed.live : [] } };
+        : {};
 
     const currentPlays = gameData[activeGameId] ?? {
-      scouting: Array.isArray(parsed.scouting) && parsed.scouting.length ? parsed.scouting : (activeGameId === demoSchedule[0].id ? demoScouting : []),
-      live: Array.isArray(parsed.live) ? parsed.live : [],
+      scouting: activeGameId === demoSchedule[0].id ? demoScouting : [],
+      live: [],
     };
 
     return {
@@ -232,16 +232,43 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     .filter(game => game.season === activeSeason)
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  const selectGame = (gameId: string) => {
+  const selectGame = async (gameId: string) => {
     if (!gameId || gameId === data.activeGameId) return;
     const gameData = {
       ...(data.gameData || {}),
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
-    const targetPlays = gameData[gameId] ?? {
-      scouting: gameId === demoSchedule[0].id ? demoScouting : [],
-      live: [],
-    };
+    let targetPlays = gameData[gameId];
+    if (!targetPlays) {
+      let livePlays: Play[] = [];
+      let scoutingPlays: Play[] = [];
+      if (isSupabaseConfigured) {
+        try {
+          const remoteLive = await getLivePlays(gameId);
+          if (remoteLive.length > 0) livePlays = remoteLive.map(livePlayToStandard);
+          const gameObj = data.schedule.find(g => g.id === gameId);
+          const seasons = await getSeasons();
+          const currentSeason = seasons.find(s => s.is_current) ?? seasons[0];
+          if (currentSeason && gameObj) {
+            const sessions = await getScoutingSessions(currentSeason.id);
+            const matchedSession = sessions.find(
+              s =>
+                s.game_id === gameId ||
+                (s.opponent && s.opponent.toLowerCase().trim() === gameObj.opponent.toLowerCase().trim())
+            );
+            if (matchedSession) {
+              const remoteScout = await getScoutingPlays(matchedSession.id);
+              if (remoteScout.length > 0) scoutingPlays = remoteScout.map(scoutingPlayToStandard);
+            }
+          }
+        } catch (err) {
+          console.warn('Could not fetch game data from Supabase:', err);
+        }
+      } else if (gameId === demoSchedule[0].id) {
+        scoutingPlays = demoScouting;
+      }
+      targetPlays = { scouting: scoutingPlays, live: livePlays };
+    }
     setData({
       ...data,
       activeGameId: gameId,
@@ -933,32 +960,6 @@ function ScoutPage({ data }: { data: Dataset }) {
   </div>;
 }
 
-function LivePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
-  const [startingYardLine, setStartingYardLine] = useState('-20');
-  const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', result: '' }); const toast = useToast(); const fileRef = useRef<HTMLInputElement>(null);
-  const update = (key: keyof Play, value: string) => setForm(current => ({ ...current, [key]: value }));
-  const previousYardLine = data.live.at(-1)?.yardLn || startingYardLine;
-  const normalizedFormYardLine = normalizeYardLine(form.yardLn);
-  const calculatedGnls = calculateGnls(previousYardLine, normalizedFormYardLine);
-  const addPlay = () => {
-    if (!form.yardLn.trim()) { toast.notify('Enter the yard line after the snap'); return; }
-    if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
-    if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
-    const next = { ...data, live: [...data.live, { ...form, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(data.live.length + 1).padStart(2, '0') }] };
-    setData(next);
-    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', result: '' }));
-    toast.notify(`Live snap added · GN/LS ${formatGnls(calculatedGnls)}`);
-  };
-  const importLive = (file?: File) => { if (!file) return; const reader = new FileReader(); reader.onload = () => { const parsed = deriveLiveGains(parseCsv(String(reader.result ?? '')), previousYardLine); setData({ ...data, live: [...data.live, ...parsed] }); toast.notify(`${parsed.length} live snaps imported with yard-line gains`); }; reader.readAsText(file); };
-  const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;
-  const yardLineField = <div className="field"><label htmlFor="live-yardLn">Yard line</label><input id="live-yardLn" className="input" value={form.yardLn} onChange={event => update('yardLn', event.target.value)} onBlur={() => update('yardLn', normalizeYardLine(form.yardLn))} placeholder="-22 or 22" inputMode="numeric" data-testid="input-live-yardLn" /><span className="field-hint">Negative = own · positive = opponent</span></div>;
-  const scout = data.scouting; const live = data.live; const metric = (plays: Play[], filter: (p: Play) => boolean) => plays.filter(filter).length;
-  return <div className="content"><PageHead eyebrow="Live game · sideline mode" title="See the shift." description="Chart the game as it happens, then compare the opponent you prepared for with the one showing up today." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button></>} />
-    <Panel><SectionTitle title="Add a live snap" detail="Enter O, D, or K for the phase, then enter the signed yard line after the snap." />{!live.length && <div className="starting-yard-line"><div className="field"><label htmlFor="live-starting-yard-line">Starting yard line</label><input id="live-starting-yard-line" className="input" value={startingYardLine} onChange={event => setStartingYardLine(event.target.value)} onBlur={() => setStartingYardLine(normalizeYardLine(startingYardLine))} placeholder="-20" inputMode="numeric" data-testid="input-live-starting-yard-line" /></div><span>Use a negative number on your side and a positive number on the opponent’s side.</span></div>}<div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{yardLineField}{field('type', 'Play type', ['Run', 'Pass'])}{field('offPlay', 'Play call', ['IZ', 'OZ', 'GT Counter', 'Glance', 'Stick', 'Four Verticals', 'Other'])}{field('form', 'Formation', ['11 Personnel', '12 Personnel', 'Empty', 'Other'])}{field('carrier', 'Ball carrier')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {previousYardLine}</span></div>{field('result', 'Result', ['Complete', 'Incomplete', 'Inside Zone +4', 'Outside Zone +8', 'First down', 'Touchdown', 'Sack', 'No gain'])}{field('defense', 'Defense', ['4-2-5', '4-3', 'Nickel', 'Goal Line', 'Other'])}</div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
-    <Panel style={{ marginTop: 14 }}><SectionTitle title="Scouting vs live" detail={live.length ? 'Same lens, two realities.' : 'Add a live snap to activate comparison.'} /><div className="comparison"><div className="compare-col"><div className="compare-head"><strong>Scouting board</strong><span className="tag">baseline</span></div><div className="compare-stat"><span>Run rate</span><b>{scout.length ? Math.round(metric(scout, p => p.type.toLowerCase().includes('run')) / scout.length * 100) : 0}%</b></div><div className="compare-stat"><span>Explosives</span><b>{metric(scout, isExplosive)}</b></div><div className="compare-stat"><span>Avg gain</span><b>{average(scout)}</b></div><div className="compare-stat"><span>Blitz rate</span><b>{scout.length ? Math.round(metric(scout, p => false) / scout.length * 100) : 0}%</b></div></div><div className="compare-col"><div className="compare-head"><strong>Live board</strong><span className="tag green">today</span></div><div className="compare-stat"><span>Run rate</span><b>{live.length ? Math.round(metric(live, p => p.type.toLowerCase().includes('run')) / live.length * 100) : 0}%</b></div><div className="compare-stat"><span>Explosives</span><b>{metric(live, isExplosive)}</b></div><div className="compare-stat"><span>Avg gain</span><b>{average(live)}</b></div><div className="compare-stat"><span>Blitz rate</span><b>{live.length ? Math.round(metric(live, p => false) / live.length * 100) : 0}%</b></div></div></div>{live.length > 0 && <div className="callout" style={{ marginTop: 14 }}><Sparkles />Live is trending {metric(live, p => p.type.toLowerCase().includes('run')) / live.length > metric(scout, p => p.type.toLowerCase().includes('run')) / Math.max(scout.length, 1) ? 'more run-heavy' : 'more pass-heavy'} than the scout. Check the next early-down tendency.</div>}</Panel>
-    {live.length > 0 && <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live snap log" detail="Most recent first" /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>ODK</th><th>Situation</th><th>Type</th><th>Call</th><th>Gain / loss</th><th>Result</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td><span className={`tag ${play.odk === 'O' ? 'green' : ''}`}>{play.odk}</span></td><td>{play.dn}&amp;{play.dist}</td><td><span className={`tag ${play.type === 'Run' ? 'green' : ''}`}>{play.type}</span></td><td>{play.offPlay}</td><td>{play.gnls}</td><td>{play.result}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => { setData({ ...data, live: data.live.filter((_, index) => index !== live.length - 1 - i) }); toast.notify('Live snap removed'); }} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div></Panel>}{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
-  </div>;
-}
 
 function ReportsPage({ data }: { data: Dataset }) {
   const [active, setActive] = useState<'qb' | 'carrier' | 'explosive'>('qb'); const plays = data.scouting; const qbs = plays.filter(p => p.type.toLowerCase().includes('pass')); const carriers = Array.from(new Set(plays.map(p => p.carrier))).filter(Boolean).map(name => { const rows = plays.filter(p => p.carrier === name); return { name, count: rows.length, yards: rows.reduce((sum, p) => sum + num(p.gnls), 0), explosive: rows.filter(isExplosive).length }; }).sort((a, b) => b.yards - a.yards);
@@ -968,7 +969,7 @@ function ReportsPage({ data }: { data: Dataset }) {
 
 function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
   const [startingYardLine, setStartingYardLine] = useState('-20');
-  const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', result: '' });
+  const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', form: '', offPlay: '', carrier: '', defense: '', result: '' });
   const toast = useToast();
   const fileRef = useRef<HTMLInputElement>(null);
   const live = data.live;
@@ -976,15 +977,19 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   const previousYardLine = live.at(-1)?.yardLn || startingYardLine;
   const normalizedFormYardLine = normalizeYardLine(form.yardLn);
   const calculatedGnls = calculateGnls(previousYardLine, normalizedFormYardLine);
+
+  const resultOptions = ['Complete', 'Complete TD', 'Fumble', 'Good', 'Incomplete', 'Interception', 'No Good', 'Penalty', 'Return', 'Rush', 'Rush TD', 'Sack', 'Scramble', '2 Pt', 'Extra Pt', 'Punt', 'FG', 'Onside Kick', 'Pass'];
+
   const addPlay = () => {
     if (!form.yardLn.trim()) { toast.notify('Enter the yard line after the snap'); return; }
     if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
     if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
     const next = { ...data, live: [...live, { ...form, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(live.length + 1).padStart(2, '0') }] };
     setData(next);
-    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', result: '' }));
+    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), yardLn: normalizedFormYardLine, gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
     toast.notify(`Live snap added · GN/LS ${formatGnls(calculatedGnls)}`);
   };
+
   const importLive = (file?: File) => {
     if (!file) return;
     const reader = new FileReader();
@@ -995,22 +1000,34 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
     };
     reader.readAsText(file);
   };
+
   const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {
     const actualIndex = live.length - 1 - displayIndex;
     const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);
     setData({ ...data, live: recalculateLiveGains(nextLive, startingYardLine) });
   };
+
   const removeLiveRow = (displayIndex: number) => {
     const actualIndex = live.length - 1 - displayIndex;
     setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
     toast.notify('Live snap removed');
   };
+
   const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;
+
+  const getSuggestions = (key: keyof Play) => Array.from(new Set([...data.scouting, ...live].map(p => p[key]))).filter(Boolean).sort();
+  const editableField = (key: keyof Play, label: string) => {
+    const listId = `live-${key}-list`;
+    return <div className="field"><label htmlFor={`live-${key}`}>{label}</label><input id={`live-${key}`} list={listId} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} /><datalist id={listId}>{getSuggestions(key).map(option => <option key={option} value={option} />)}</datalist></div>;
+  };
+
   const yardLineField = <div className="field"><label htmlFor="live-yardLn">Yard line</label><input id="live-yardLn" className="input" value={form.yardLn} onChange={event => update('yardLn', event.target.value)} onBlur={() => update('yardLn', normalizeYardLine(form.yardLn))} placeholder="-22 or 22" inputMode="numeric" data-testid="input-live-yardLn" /><span className="field-hint">Negative = own · positive = opponent</span></div>;
+
   const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => key === 'yardLn' && updateLiveRow(displayIndex, key, normalizeYardLine(event.currentTarget.value))} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
+
   return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button></>} />
-    <Panel><SectionTitle title="Add a live snap" detail="Choose O, D, or K. GN/LS calculates from the previous spot." />{!live.length && <div className="starting-yard-line"><div className="field"><label htmlFor="live-starting-yard-line">Starting yard line</label><input id="live-starting-yard-line" className="input" value={startingYardLine} onChange={event => setStartingYardLine(event.target.value)} onBlur={() => setStartingYardLine(normalizeYardLine(startingYardLine))} placeholder="-20" inputMode="numeric" data-testid="input-live-starting-yard-line" /></div><span>Negative = your side · positive = opponent’s side.</span></div>}<div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{yardLineField}{field('type', 'Play type', ['Run', 'Pass'])}{field('offPlay', 'Play call', ['IZ', 'OZ', 'GT Counter', 'Glance', 'Stick', 'Four Verticals', 'Other'])}{field('form', 'Formation', ['11 Personnel', '12 Personnel', 'Empty', 'Other'])}{field('carrier', 'Ball carrier')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {previousYardLine}</span></div>{field('result', 'Result', ['Complete', 'Incomplete', 'Inside Zone +4', 'Outside Zone +8', 'First down', 'Touchdown', 'Sack', 'No gain'])}{field('defense', 'Defense', ['4-2-5', '4-3', 'Nickel', 'Goal Line', 'Other'])}</div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
-    <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live game spreadsheet" detail={live.length ? `${live.length} snaps · click any cell to edit` : 'Your saved snaps will appear here'} /></div>{live.length ? <div className="table-wrap"><table className="data-table live-sheet"><thead><tr><th>Play</th><th>ODK</th><th>Down</th><th>Distance</th><th>Type</th><th>Call</th><th>Formation</th><th>Ball carrier</th><th>Yard line</th><th>GN/LS</th><th>Result</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'type', play.type, ['Run', 'Pass'])}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td>{editCell(i, 'result', play.result)}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => removeLiveRow(i)} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No live snaps yet</h3><p>Add a snap above or import a live CSV. Saved snaps stay editable here.</p></div>}</Panel>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
+    <Panel><SectionTitle title="Add a live snap" detail="Choose O, D, or K. GN/LS calculates from the previous spot." />{!live.length && <div className="starting-yard-line"><div className="field"><label htmlFor="live-starting-yard-line">Starting yard line</label><input id="live-starting-yard-line" className="input" value={startingYardLine} onChange={event => setStartingYardLine(event.target.value)} onBlur={() => setStartingYardLine(normalizeYardLine(startingYardLine))} placeholder="-20" inputMode="numeric" data-testid="input-live-starting-yard-line" /></div><span>Negative = your side · positive = opponent’s side.</span></div>}<div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{yardLineField}{editableField('form', 'Formation')}{editableField('offPlay', 'Play call')}{field('type', 'Play type', ['Run', 'Pass'])}{editableField('carrier', 'Ball carrier')}{field('result', 'Result', resultOptions)}{editableField('defense', 'Defense')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {previousYardLine}</span></div></div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
+    <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live game spreadsheet" detail={live.length ? `${live.length} snaps · click any cell to edit` : 'Your saved snaps will appear here'} /></div>{live.length ? <div className="table-wrap"><table className="data-table live-sheet"><thead><tr><th>Play</th><th>ODK</th><th>Down</th><th>Distance</th><th>Yard line</th><th>Formation</th><th>Play call</th><th>Play type</th><th>Ball carrier</th><th>Result</th><th>Defense</th><th>GN/LS</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type, ['Run', 'Pass'])}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result, resultOptions)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => removeLiveRow(i)} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No live snaps yet</h3><p>Add a snap above or import a live CSV. Saved snaps stay editable here.</p></div>}</Panel>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
   </div>;
 }
 
