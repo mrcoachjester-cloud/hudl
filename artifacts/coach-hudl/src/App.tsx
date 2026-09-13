@@ -1109,10 +1109,13 @@ function Router() {
     let timeoutId: NodeJS.Timeout;
 
     async function loadSupabaseData() {
+      console.log('[Router] Starting Supabase data load...');
       try {
         const seasons = await getSeasons();
+        console.log('[Router] Seasons loaded:', seasons.length);
 
         if (!seasons.length) {
+          console.warn('[Router] No seasons found, using demo data');
           return;
         }
 
@@ -1120,6 +1123,7 @@ function Router() {
           seasons.find(season => season.is_current) ?? seasons[0];
 
         const games = await getGames(undefined, true);
+        console.log('[Router] Games loaded:', games.length);
 
         if (cancelled) return;
 
@@ -1154,22 +1158,25 @@ function Router() {
           activeGameId,
         });
       } catch (error) {
-        console.error('Could not load football data from Supabase:', error);
+        console.error('[Router] Supabase load failed:', error);
+        (window as any).__debug?.errors?.push(String(error));
       } finally {
         if (!cancelled) {
           clearTimeout(timeoutId);
           setLoadingFromSupabase(false);
+          console.log('[Router] Loading state cleared');
         }
       }
     }
 
-    // Set a timeout to prevent hanging indefinitely
+    // Set a SHORTER timeout - 2 seconds max
+    console.log('[Router] Setting 2-second timeout for Supabase...');
     timeoutId = setTimeout(() => {
       if (!cancelled) {
-        console.warn('Supabase data load timed out after 5 seconds, proceeding with cached data');
+        console.warn('[Router] Supabase timeout after 2 seconds, proceeding with cached data');
         setLoadingFromSupabase(false);
       }
-    }, 5000);
+    }, 2000);
 
     loadSupabaseData();
 

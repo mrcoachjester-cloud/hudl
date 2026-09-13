@@ -88,14 +88,24 @@ export type ScoutingPlay = {
  * Get all seasons.
  */
 export async function getSeasons(): Promise<Season[]> {
-  const { data, error } = await supabase
-    .from('seasons')
-    .select('*')
-    .order('season_year', { ascending: false });
+  if (!supabase) {
+    console.warn('[getSeasons] Supabase not configured, returning empty list');
+    return [];
+  }
 
-  if (error) throw error;
+  try {
+    const { data, error } = await supabase
+      .from('seasons')
+      .select('*')
+      .order('season_year', { ascending: false });
 
-  return data ?? [];
+    if (error) throw error;
+
+    return data ?? [];
+  } catch (err) {
+    console.error('[getSeasons] Error:', err);
+    return [];
+  }
 }
 
 /**
@@ -105,24 +115,34 @@ export async function getGames(
   seasonId?: string,
   includeArchived = true
 ): Promise<Game[]> {
-  let query = supabase
-    .from('games')
-    .select('*')
-    .order('game_date', { ascending: false });
-
-  if (seasonId) {
-    query = query.eq('season_id', seasonId);
+  if (!supabase) {
+    console.warn('[getGames] Supabase not configured, returning empty list');
+    return [];
   }
 
-  if (!includeArchived) {
-    query = query.eq('archived', false);
+  try {
+    let query = supabase
+      .from('games')
+      .select('*')
+      .order('game_date', { ascending: false });
+
+    if (seasonId) {
+      query = query.eq('season_id', seasonId);
+    }
+
+    if (!includeArchived) {
+      query = query.eq('archived', false);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+
+    return data ?? [];
+  } catch (err) {
+    console.error('[getGames] Error:', err);
+    return [];
   }
-
-  const { data, error } = await query;
-
-  if (error) throw error;
-
-  return data ?? [];
 }
 
 /**
