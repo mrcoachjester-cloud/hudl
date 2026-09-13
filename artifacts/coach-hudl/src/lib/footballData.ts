@@ -88,6 +88,7 @@ export type ScoutingPlay = {
  * Get all seasons.
  */
 export async function getSeasons(): Promise<Season[]> {
+  if (!supabase) return [];
   const { data, error } = await supabase
     .from('seasons')
     .select('*')
@@ -105,6 +106,7 @@ export async function getGames(
   seasonId?: string,
   includeArchived = true
 ): Promise<Game[]> {
+  if (!supabase) return [];
   let query = supabase
     .from('games')
     .select('*')
