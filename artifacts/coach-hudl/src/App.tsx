@@ -1323,17 +1323,33 @@ function Router() {
             if (remoteLive.length > 0) {
               livePlays = remoteLive.map(livePlayToStandard);
             }
+            const gameObj = schedule.find(g => g.id === activeGameId);
+            if (currentSeason && gameObj) {
+              const sessions = await getScoutingSessions(currentSeason.id);
+              const matchedSession = sessions.find(
+                s => s.game_id === activeGameId || (s.opponent && s.opponent.toLowerCase().trim() === gameObj.opponent.toLowerCase().trim())
+              );
+              if (matchedSession) {
+                const remoteScout = await getScoutingPlays(matchedSession.id);
+                if (remoteScout.length > 0) {
+                  scoutingPlays = remoteScout.map(scoutingPlayToStandard);
+                }
+              }
+            }
           }
         } catch (e) {
-          console.warn('Could not fetch remote live plays:', e);
+          console.warn('Could not fetch remote plays on load:', e);
         }
 
         setDataState(current => {
+          // If we fetched new plays from Supabase, use them. Otherwise, keep whatever was locally cached (current.gameData[activeGameId]), or empty arrays.
+          const localActiveGame = current.gameData?.[activeGameId] || { scouting: [], live: [] };
+          
           const gameData = {
             ...(current.gameData || {}),
             [activeGameId]: {
-              scouting: current.gameData?.[activeGameId]?.scouting ?? (scoutingPlays.length ? scoutingPlays : current.scouting),
-              live: livePlays.length ? livePlays : current.live,
+              scouting: scoutingPlays.length > 0 ? scoutingPlays : localActiveGame.scouting,
+              live: livePlays.length > 0 ? livePlays : localActiveGame.live,
             },
           };
           const nextDataset: Dataset = {
