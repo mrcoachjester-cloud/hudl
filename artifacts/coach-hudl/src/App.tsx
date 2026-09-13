@@ -9,6 +9,7 @@ import {
 } from './lib/footballData';
 import { Check, ChevronRight, CircleAlert, ClipboardList, Download, FileSpreadsheet, Film, LayoutDashboard, Menu, Plus, RefreshCw, Search, Shield, Sparkles, Target, Trash2, UploadCloud, Users, X, Zap } from 'lucide-react';
 import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
+import ScoutingPage from './pages/ScoutingPage';
 
 type Play = {
   playNo: string;
@@ -1188,7 +1189,7 @@ function Router() {
       <Switch>
         <Route path="/"><Dashboard data={data} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
-        <Route path="/scout"><ScoutPage data={data} /></Route>
+        <Route path="/scout"><ScoutingPage data={data} setData={setData} /></Route>
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
         <Route path="/reports"><ReportsHubPage data={data} /></Route>
         <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
