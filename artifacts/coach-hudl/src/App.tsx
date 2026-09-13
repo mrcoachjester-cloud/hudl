@@ -1038,24 +1038,12 @@ function LivePage({ data, setData }: { data: Dataset; setData: (data: Dataset) =
   const [startingYardLine, setStartingYardLine] = useState('-20');
   const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), yardLn: data.live.at(-1)?.yardLn ?? '-22', result: '' }); const toast = useToast(); const fileRef = useRef<HTMLInputElement>(null);
   const update = (key: keyof Play, value: string) => setForm(current => ({ ...current, [key]: value }));
-const previousYardLine =
-  data.live.length > 0
-    ? data.live[data.live.length - 1].yardLn
-    : startingYardLine;
-
-const normalizedStartingYardLine = normalizeYardLine(
-  data.live.length > 0
-    ? data.live[data.live.length - 1].yardLn
-    : startingYardLine
-);
-
+const previousYardLine = live.at(-1)?.yardLn || startingYardLine;
 const normalizedFormYardLine = normalizeYardLine(form.yardLn);
-
 const calculatedGnls = calculateGnls(
-  normalizedStartingYardLine,
+  previousYardLine,
   normalizedFormYardLine
-);  const calculatedGnls = calculateGnls(previousYardLine, normalizedFormYardLine);
-  const addPlay = () => {
+);  
     if (!form.yardLn.trim()) { toast.notify('Enter the yard line after the snap'); return; }
     if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
     if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
