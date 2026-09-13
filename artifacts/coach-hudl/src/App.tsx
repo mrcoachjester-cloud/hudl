@@ -1043,23 +1043,193 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
     <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live game spreadsheet" detail={live.length ? `${live.length} snaps · click any cell to edit` : 'Your saved snaps will appear here'} /></div>{live.length ? <div className="table-wrap"><table className="data-table live-sheet"><thead><tr><th>Play</th><th>ODK</th><th>Down</th><th>Dist</th><th>Start</th><th>End</th><th>Formation</th><th>Play call</th><th>Play type</th><th>Ball carrier</th><th>Result</th><th>Defense</th><th>GN/LS</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'startYardLn', play.startYardLn ?? '')}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type, ['Run', 'Pass'])}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result, resultOptions)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => removeLiveRow(i)} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No live snaps yet</h3><p>Add a snap above or import a live CSV. Saved snaps stay editable here.</p></div>}</Panel>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
   </div>;
 }
+function isRun(p: Play) { return p.type.toLowerCase().includes('run'); }
+function isPass(p: Play) { return p.type.toLowerCase().includes('pass'); }
+function isExplosiveRun(p: Play) { return isRun(p) && num(p.gnls) >= 10; }
+function isExplosivePass(p: Play) { return isPass(p) && num(p.gnls) >= 15; }
+function formatPct(val: number, total: number) { return total > 0 ? `${Math.round((val / total) * 100)}%` : '—'; }
+function getRunPass(plays: Play[]) { 
+  const r = plays.filter(isRun).length; 
+  const p = plays.filter(isPass).length; 
+  return plays.length > 0 ? `${Math.round((r / plays.length) * 100)}R / ${Math.round((p / plays.length) * 100)}P` : '—'; 
+}
+function topPlaysStr(plays: Play[], isRunFlag: boolean, limit = 2) {
+  const filtered = plays.filter(p => isRunFlag ? isRun(p) : isPass(p));
+  if (!filtered.length) return '—';
+  const counts: Record<string, number> = {};
+  filtered.forEach(p => counts[p.offPlay] = (counts[p.offPlay] || 0) + 1);
+  return Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, limit).map(e => e[0] || 'Unknown').join(', ');
+}
+function getSituation(play: Play) {
+  const down = num(play.dn);
+  const distance = num(play.dist);
+  if (down === 1) return distance > 10 ? '1st & Long' : '1st & 10';
+  const distLabel = distance >= 7 ? 'Long' : distance >= 4 ? 'Med' : 'Short';
+  return `${down === 2 ? '2nd' : down === 3 ? '3rd' : '4th'} & ${distLabel}`;
+}
+function changeArrow(scoutPct: number, livePct: number) {
+  const diff = livePct - scoutPct;
+  if (diff > 5) return `▲ +${Math.round(diff)}%`;
+  if (diff < -5) return `▼ ${Math.round(diff)}%`;
+  return '✓';
+}
 
 function ReportsHubPage({ data }: { data: Dataset }) {
   const [active, setActive] = useState<'offense' | 'defense'>('offense');
   const live = data.live;
+  
+  // OFFENSE: Self tendency. Our 'O' from the live game.
   const offense = live.filter(play => normalizeOdk(play.odk) === 'O');
-  const defense = live.filter(play => normalizeOdk(play.odk) === 'D');
-  const scoutingDefense = data.scouting.filter(play => normalizeOdk(play.odk) === 'D');
-  const qbs = offense.filter(play => play.type.toLowerCase().includes('pass'));
-  const carriers = Array.from(new Set(offense.map(play => play.carrier))).filter(Boolean).map(name => { const rows = offense.filter(play => play.carrier === name); return { name, count: rows.length, yards: rows.reduce((sum, play) => sum + num(play.gnls), 0), explosive: rows.filter(isExplosive).length }; }).sort((a, b) => b.yards - a.yards);
-  const runPass = (plays: Play[]) => { const runs = plays.filter(play => play.type.toLowerCase().includes('run')).length; const passes = plays.filter(play => play.type.toLowerCase().includes('pass')).length; return plays.length ? `${Math.round(runs / plays.length * 100)}% / ${Math.round(passes / plays.length * 100)}%` : '—'; };
-  const situation = (play: Play) => { const down = num(play.dn); if (down === 1) return '1st & long'; const distance = num(play.dist); return `${down === 2 ? '2nd' : '3rd'} & ${distance >= 7 ? 'long' : distance >= 4 ? 'med' : 'short'}`; };
-  const situations = ['1st & long', '2nd & long', '2nd & med', '2nd & short', '3rd & long', '3rd & med', '3rd & short'];
-  const defenseFormationRows = Array.from(new Set([...scoutingDefense, ...defense].map(play => play.form).filter(Boolean))).slice(0, 8);
-  const exportReport = () => { const source = active === 'offense' ? offense : defense; const headers = ['Play #', 'ODK', 'Type', 'Ball Carrier', 'Gain/Loss', 'Result', 'Formation', 'Play Call']; const rows = source.map(play => [play.playNo, play.odk, play.type, play.carrier, play.gnls, play.result, play.form, play.offPlay].map(csvCell).join(',')); download(`coach-hudl-live-${active}.csv`, [headers.join(','), ...rows].join('\n')); };
+  
+  // DEFENSE: Scout vs Live comparison. Scout 'O' vs Live 'D'.
+  const defenseLive = live.filter(play => normalizeOdk(play.odk) === 'D');
+  const defenseScout = data.scouting.filter(play => normalizeOdk(play.odk) === 'O');
+
+  const exportReport = () => { 
+    const source = active === 'offense' ? offense : defenseLive; 
+    const headers = ['Play #', 'ODK', 'Type', 'Ball Carrier', 'Gain/Loss', 'Result', 'Formation', 'Play Call']; 
+    const rows = source.map(play => [play.playNo, play.odk, play.type, play.carrier, play.gnls, play.result, play.form, play.offPlay].map(csvCell).join(',')); 
+    download(`coach-hudl-${active}.csv`, [headers.join(','), ...rows].join('\n')); 
+  };
+
+  // --- OFFENSE COMPUTATIONS ---
+  const oRuns = offense.filter(isRun);
+  const oPasses = offense.filter(isPass);
+  
+  const oCarriers = Array.from(new Set(offense.map(p => p.carrier))).filter(Boolean).map(name => {
+    const touches = offense.filter(p => p.carrier === name);
+    const rushYards = touches.filter(isRun).reduce((s, p) => s + num(p.gnls), 0);
+    const recYards = touches.filter(isPass).reduce((s, p) => s + num(p.gnls), 0);
+    const totalYards = rushYards + recYards;
+    return { name, touches: touches.length, rushYards, recYards, avg: (touches.length ? totalYards / touches.length : 0) };
+  }).sort((a, b) => (b.rushYards + b.recYards) - (a.rushYards + a.recYards));
+  
+  const oFormations = Array.from(new Set(offense.map(p => p.form))).filter(Boolean).map(form => {
+    const plays = offense.filter(p => p.form === form);
+    return { form, plays };
+  }).sort((a, b) => b.plays.length - a.plays.length);
+  
+  const oTopRuns = Array.from(new Set(oRuns.map(p => p.offPlay))).filter(Boolean).map(offPlay => {
+    const plays = oRuns.filter(p => p.offPlay === offPlay);
+    return { offPlay, calls: plays.length, avgGain: average(plays), explosives: plays.filter(isExplosiveRun).length };
+  }).sort((a, b) => b.calls - a.calls);
+
+  const oTopPasses = Array.from(new Set(oPasses.map(p => p.offPlay))).filter(Boolean).map(offPlay => {
+    const plays = oPasses.filter(p => p.offPlay === offPlay);
+    return { offPlay, calls: plays.length, avgGain: average(plays), explosives: plays.filter(isExplosivePass).length };
+  }).sort((a, b) => b.calls - a.calls);
+
+  const oSituations = ['1st & 10', '1st & Long', '2nd & Long', '2nd & Med', '2nd & Short', '3rd & Long', '3rd & Med', '3rd & Short'].map(sit => {
+    const plays = offense.filter(p => getSituation(p) === sit);
+    return { sit, plays };
+  }).filter(s => s.plays.length > 0);
+
+  // --- DEFENSE COMPUTATIONS ---
+  const dScoutRuns = defenseScout.filter(isRun).length;
+  const dScoutPasses = defenseScout.filter(isPass).length;
+  const dScoutPctRun = defenseScout.length ? (dScoutRuns / defenseScout.length) * 100 : 0;
+  const dScoutPctPass = defenseScout.length ? (dScoutPasses / defenseScout.length) * 100 : 0;
+  
+  const dLiveRuns = defenseLive.filter(isRun).length;
+  const dLivePasses = defenseLive.filter(isPass).length;
+  const dLivePctRun = defenseLive.length ? (dLiveRuns / defenseLive.length) * 100 : 0;
+  const dLivePctPass = defenseLive.length ? (dLivePasses / defenseLive.length) * 100 : 0;
+
+  const dFormations = Array.from(new Set([...defenseScout.map(p => p.form), ...defenseLive.map(p => p.form)])).filter(Boolean).map(form => {
+    const scoutF = defenseScout.filter(p => p.form === form);
+    const liveF = defenseLive.filter(p => p.form === form);
+    const sRunPct = scoutF.length ? (scoutF.filter(isRun).length / scoutF.length) * 100 : 0;
+    const lRunPct = liveF.length ? (liveF.filter(isRun).length / liveF.length) * 100 : 0;
+    const lPassPct = liveF.length ? (liveF.filter(isPass).length / liveF.length) * 100 : 0;
+    return { form, scoutPlays: scoutF.length, livePlays: liveF.length, sRunPct, lRunPct, lPassPct, change: changeArrow(sRunPct, lRunPct) };
+  }).sort((a, b) => b.livePlays - a.livePlays).slice(0, 5);
+
+  const dSituations = ['1st & 10', '1st & Long', '2nd & Long', '2nd & Med', '2nd & Short', '3rd & Long', '3rd & Med', '3rd & Short'].map(sit => {
+    const sPlays = defenseScout.filter(p => getSituation(p) === sit);
+    const lPlays = defenseLive.filter(p => getSituation(p) === sit);
+    return { sit, scout: sPlays, live: lPlays };
+  }).filter(s => s.scout.length > 0 || s.live.length > 0);
+
   return <div className="content"><PageHead eyebrow="Reports · live game analysis" title="Make the call." description="Live offense and defense reports stay separate, so each staff conversation starts with the right lens." actions={<button className="btn btn-primary" onClick={exportReport} data-testid="button-export-report"><Download /> Export {active} CSV</button>} />
-    <div className="filters report-tabs"><button className={`btn ${active === 'offense' ? 'btn-green' : 'btn-ghost'}`} onClick={() => setActive('offense')} data-testid="button-report-live-offense"><Zap /> Live offense</button><button className={`btn ${active === 'defense' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActive('defense')} data-testid="button-report-defense"><Shield /> Defense</button><span className="eyebrow">{active === 'offense' ? offense.length : defense.length} live snaps in view</span></div>
-    {active === 'offense' ? <div className="grid" style={{ gridTemplateColumns: 'minmax(0, .8fr) minmax(0, 1.2fr)' }}><Panel><SectionTitle title="Live offense" detail="O entries only" /><div className="report-list"><div className="report-card active-report"><div className="report-info"><div className="report-icon"><Users size={16} /></div><div><h3>Quarterback report</h3><p>{qbs.length} pass attempts · pressure</p></div></div></div><div className="report-card"><div className="report-info"><div className="report-icon"><Zap size={16} /></div><div><h3>Ball-carrier report</h3><p>{carriers.length} carriers · usage · yardage</p></div></div></div><div className="report-card"><div className="report-info"><div className="report-icon"><Sparkles size={16} /></div><div><h3>Explosive plays</h3><p>{offense.filter(isExplosive).length} gains of 12+ yards</p></div></div></div></div></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Quarterback report" detail={`${offense.length} O snaps in the live board`} /></div><div className="panel-pad"><div className="grid kpi-grid" style={{ marginBottom: 22 }}><Kpi label="Pass attempts" value={String(qbs.length)} note="live throws" /><Kpi label="Pass yards" value={String(qbs.reduce((sum, play) => sum + num(play.gnls), 0))} note="charted gain" green /><Kpi label="Explosives" value={String(offense.filter(isExplosive).length)} note="12+ yards" /></div>{qbs.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Call</th><th>Formation</th><th>Result</th><th>Gain</th></tr></thead><tbody>{qbs.map((play, i) => <tr key={i}><td><strong>{play.offPlay}</strong></td><td>{play.form}</td><td>{play.result}</td><td>{formatGnls(num(play.gnls))}</td></tr>)}</tbody></table></div> : <div className="empty"><Users size={28} /><h3>No live O entries yet</h3><p>Mark offensive snaps with O in Live Game to populate this report.</p></div>}</div></Panel></div> : <div className="grid"><Panel><SectionTitle title="Scouting vs live defense" detail="D entries only · run/pass percentage" /><div className="comparison"><div className="compare-col"><div className="compare-head"><strong>Scouting board</strong><span className="tag">baseline</span></div><div className="compare-stat"><span>Snaps</span><b>{scoutingDefense.length}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(scoutingDefense)}</b></div><div className="compare-stat"><span>Average gain</span><b>{average(scoutingDefense)}</b></div></div><div className="compare-col"><div className="compare-head"><strong>Live board</strong><span className="tag green">today</span></div><div className="compare-stat"><span>Snaps</span><b>{defense.length}</b></div><div className="compare-stat"><span>Run / pass</span><b>{runPass(defense)}</b></div><div className="compare-stat"><span>Average gain</span><b>{average(defense)}</b></div></div></div></Panel><Panel><SectionTitle title="Run / pass by situation" detail="Scouting / live percentages" /><div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Scouting R / P</th><th>Live R / P</th></tr></thead><tbody>{situations.map(label => <tr key={label}><td><strong>{label}</strong></td><td>{runPass(scoutingDefense.filter(play => situation(play) === label))}</td><td>{runPass(defense.filter(play => situation(play) === label))}</td></tr>)}</tbody></table></div></Panel><Panel><SectionTitle title="Formation run / pass" detail="Scouting / live percentages" />{defenseFormationRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Scouting R / P</th><th>Live R / P</th></tr></thead><tbody>{defenseFormationRows.map(form => <tr key={form}><td><strong>{form}</strong></td><td>{runPass(scoutingDefense.filter(play => play.form === form))}</td><td>{runPass(defense.filter(play => play.form === form))}</td></tr>)}</tbody></table></div> : <div className="empty"><Shield size={28} /><h3>No D entries yet</h3><p>Mark defensive snaps with D in Live Game to populate this report.</p></div>}</Panel></div>}
+    <div className="filters report-tabs"><button className={`btn ${active === 'offense' ? 'btn-green' : 'btn-ghost'}`} onClick={() => setActive('offense')} data-testid="button-report-live-offense"><Zap /> Live offense</button><button className={`btn ${active === 'defense' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setActive('defense')} data-testid="button-report-defense"><Shield /> Defense</button><span className="eyebrow">{active === 'offense' ? offense.length : defenseLive.length} live snaps in view</span></div>
+    
+    {active === 'offense' ? <div className="grid">
+      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+        <Panel><SectionTitle title="OFFENSE IDENTITY" detail="Live game self-tendency" />
+          <div className="table-wrap"><table className="data-table"><tbody>
+            <tr><td>Plays</td><td><strong>{offense.length}</strong></td></tr>
+            <tr><td>Run / Pass</td><td><strong>{formatPct(oRuns.length, offense.length)} / {formatPct(oPasses.length, offense.length)}</strong></td></tr>
+            <tr><td>X-Run (10+)</td><td><strong>{offense.filter(isExplosiveRun).length}</strong></td></tr>
+            <tr><td>X-Pass (15+)</td><td><strong>{offense.filter(isExplosivePass).length}</strong></td></tr>
+          </tbody></table></div>
+        </Panel>
+        <Panel><SectionTitle title="BALL CARRIERS" detail="Touches and yardage" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Carrier</th><th>Touches</th><th>Rush Yds</th><th>Rec Yds</th><th>Avg</th></tr></thead>
+          <tbody>{oCarriers.map(c => <tr key={c.name}><td><strong>{c.name}</strong></td><td>{c.touches}</td><td>{c.rushYards}</td><td>{c.recYards}</td><td>{c.avg.toFixed(1)}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+      </div>
+      
+      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+        <Panel><SectionTitle title="TOP FORMATIONS (SELF)" detail="Most used formations" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Usage</th><th>R/P</th><th>Fav Runs</th><th>Fav Pass</th></tr></thead>
+          <tbody>{oFormations.slice(0, 5).map(f => <tr key={f.form}><td><strong>{f.form}</strong></td><td>{formatPct(f.plays.length, offense.length)}</td><td>{getRunPass(f.plays)}</td><td>{topPlaysStr(f.plays, true, 1)}</td><td>{topPlaysStr(f.plays, false, 1)}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+        <Panel><SectionTitle title="DOWN & DISTANCE" detail="Situational tendency" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Plays</th><th>R/P</th><th>Top Plays</th></tr></thead>
+          <tbody>{oSituations.map(s => <tr key={s.sit}><td><strong>{s.sit}</strong></td><td>{s.plays.length}</td><td>{getRunPass(s.plays)}</td><td>{topPlaysStr(s.plays, true, 1)} / {topPlaysStr(s.plays, false, 1)}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+      </div>
+
+      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+        <Panel><SectionTitle title="TOP RUN PLAYS" detail="Sorted by volume" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg Gain</th><th>Explosive</th></tr></thead>
+          <tbody>{oTopRuns.slice(0,5).map(r => <tr key={r.offPlay}><td><strong>{r.offPlay}</strong></td><td>{r.calls}</td><td>{r.avgGain}</td><td>{r.explosives}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+        <Panel><SectionTitle title="TOP PASS PLAYS" detail="Sorted by volume" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg Gain</th><th>Explosive</th></tr></thead>
+          <tbody>{oTopPasses.slice(0,5).map(p => <tr key={p.offPlay}><td><strong>{p.offPlay}</strong></td><td>{p.calls}</td><td>{p.avgGain}</td><td>{p.explosives}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+      </div>
+    </div> 
+    
+    : 
+    
+    <div className="grid">
+      <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)' }}>
+        <Panel><SectionTitle title="OVERALL IDENTITY" detail="Scout baseline vs Live" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th></th><th>Scout</th><th>Live</th><th>Trend</th></tr></thead>
+          <tbody>
+            <tr><td>Plays</td><td>{defenseScout.length}</td><td>{defenseLive.length}</td><td></td></tr>
+            <tr><td>Run / Pass</td><td>{Math.round(dScoutPctRun)}% / {Math.round(dScoutPctPass)}%</td><td>{Math.round(dLivePctRun)}% / {Math.round(dLivePctPass)}%</td><td>{changeArrow(dScoutPctPass, dLivePctPass)} Pass</td></tr>
+            <tr><td>X-Run (10+)</td><td>{defenseScout.filter(isExplosiveRun).length}</td><td>{defenseLive.filter(isExplosiveRun).length}</td><td></td></tr>
+            <tr><td>X-Pass (15+)</td><td>{defenseScout.filter(isExplosivePass).length}</td><td>{defenseLive.filter(isExplosivePass).length}</td><td></td></tr>
+          </tbody></table></div>
+        </Panel>
+        
+        <Panel><SectionTitle title="TOP FORMATIONS" detail="By Live usage" />
+          <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>Live R/P</th><th>Scout R/P</th><th>Change (Run)</th></tr></thead>
+          <tbody>{dFormations.map(f => <tr key={f.form}><td><strong>{f.form}</strong></td><td>{f.livePlays}</td><td>{Math.round(f.lRunPct)}R / {Math.round(f.lPassPct)}P</td><td>{Math.round(f.sRunPct)}% Run</td><td>{f.change}</td></tr>)}</tbody>
+          </table></div>
+        </Panel>
+      </div>
+
+      <Panel><SectionTitle title="DOWN/DISTANCE" detail="Situational shifts" />
+        <div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Live R/P</th><th>Scout R/P</th><th>Expected (Scout)</th></tr></thead>
+        <tbody>{dSituations.map(s => {
+          const lRun = s.live.filter(isRun).length; const lPass = s.live.filter(isPass).length;
+          const sRun = s.scout.filter(isRun).length; const sPass = s.scout.filter(isPass).length;
+          const lRP = s.live.length ? `${Math.round((lRun/s.live.length)*100)}% / ${Math.round((lPass/s.live.length)*100)}%` : '—';
+          const sRP = s.scout.length ? `${Math.round((sRun/s.scout.length)*100)}% / ${Math.round((sPass/s.scout.length)*100)}%` : '—';
+          return <tr key={s.sit}><td><strong>{s.sit}</strong></td><td>{lRP}</td><td>{sRP}</td><td>{s.scout.length ? (sRun >= sPass ? topPlaysStr(s.scout, true, 2) : topPlaysStr(s.scout, false, 2)) : '—'}</td></tr>;
+        })}</tbody>
+        </table></div>
+      </Panel>
+    </div>}
   </div>;
 }
 
