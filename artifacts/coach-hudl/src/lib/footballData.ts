@@ -20,7 +20,7 @@ export type ScoutingPlay = {
 };
 export type StandardPlay = {
   playNo: string; odk: string; dn: string; dist: string; hash: string; gnls: string; carrier: string; yardLn: string; type: string; result: string; form: string; personnel: string; scheme: string; defense: string; motion: string; offPlay: string; dir: string; backfield: string;
-  rpo?: string; stunt?: string; coverage?: string; blitz?: string; protection?: string; read?: string; comments?: string; playStrength?: string; defCall?: string;
+  rpo?: string; stunt?: string; coverage?: string; blitz?: string; protection?: string; read?: string; comments?: string; playStrength?: string; defCall?: string; startYardLn?: string;
 };
 
 export function livePlayToStandard(play: LivePlay): StandardPlay {
