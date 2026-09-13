@@ -9,7 +9,7 @@ import {
 } from './lib/footballData';
 import { Check, ChevronRight, CircleAlert, ClipboardList, Download, FileSpreadsheet, Film, LayoutDashboard, Menu, Plus, RefreshCw, Search, Shield, Sparkles, Target, Trash2, UploadCloud, Users, X, Zap } from 'lucide-react';
 import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter';
-import ScoutingPage from './pages/ScoutingPage';
+import { ScoutingPage } from './pages/ScoutingPage';
 
 type Play = {
   playNo: string;
