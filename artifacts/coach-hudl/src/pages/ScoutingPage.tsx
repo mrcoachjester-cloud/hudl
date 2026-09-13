@@ -21,13 +21,18 @@ export const ScoutingPage: React.FC<ScoutingPageProps> = ({ data, setData }) => 
     week: '',
     description: '',
   });
+  const [renderError, setRenderError] = useState<string | null>(null);
 
   // Get current season from Supabase integration in App.tsx
   const currentSeason = data.schedule[0];
   const activeSeasonId = 'current-season'; // This would come from your Supabase context
 
   useEffect(() => {
-    loadScoutingSessions();
+    try {
+      loadScoutingSessions();
+    } catch (err) {
+      setRenderError(`Initialization error: ${err instanceof Error ? err.message : 'Unknown error'}`);
+    }
   }, [activeSeasonId]);
 
   useEffect(() => {
@@ -155,6 +160,12 @@ export const ScoutingPage: React.FC<ScoutingPageProps> = ({ data, setData }) => 
 
   return (
     <div className="content">
+      {renderError && (
+        <div className="alert alert-error">
+          <AlertCircle size={16} />
+          {renderError}
+        </div>
+      )}
       <div className="page-header">
         <div>
           <h1>Scouting System</h1>

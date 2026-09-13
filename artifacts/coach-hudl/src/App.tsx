@@ -1106,6 +1106,7 @@ function Router() {
 
   useEffect(() => {
     let cancelled = false;
+    let timeoutId: NodeJS.Timeout;
 
     async function loadSupabaseData() {
       try {
@@ -1156,15 +1157,25 @@ function Router() {
         console.error('Could not load football data from Supabase:', error);
       } finally {
         if (!cancelled) {
+          clearTimeout(timeoutId);
           setLoadingFromSupabase(false);
         }
       }
     }
 
+    // Set a timeout to prevent hanging indefinitely
+    timeoutId = setTimeout(() => {
+      if (!cancelled) {
+        console.warn('Supabase data load timed out after 5 seconds, proceeding with cached data');
+        setLoadingFromSupabase(false);
+      }
+    }, 5000);
+
     loadSupabaseData();
 
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
     };
   }, []);
 
