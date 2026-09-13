@@ -18,7 +18,7 @@ export function subscribeToLiveGame(
       onChange({ eventType: payload.eventType as LivePlayRealtimeEvent['eventType'], play: (payload.new || payload.old) as Record<string, unknown> });
     })
     .subscribe();
-  return () => { void supabase.removeChannel(channel); };
+  return () => { void supabase?.removeChannel(channel); };
 }
 
 export async function saveLivePlayCell(

@@ -180,10 +180,10 @@ function download(name: string, contents: string, type = 'text/csv') {
   const blob = new Blob([contents], { type }); const link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = name; link.click(); URL.revokeObjectURL(link.href);
 }
 function normalizeHeader(header: string) { return header.toLowerCase().replace(/[\s_./-]+/g, ' ').trim(); }
-const headerAliases: Record<keyof Play, string[]> = {
+const headerAliases: Partial<Record<keyof Play, string[]>> = {
   playNo: ['play #', 'play no', 'play number', 'play'], odk: ['odk', 'off def kick'], dn: ['dn', 'down'], dist: ['dist', 'distance', 'to go'],
   hash: ['hash', 'field hash'], gnls: ['gn/ls', 'gn ls', 'gain loss', 'yards', 'result yards'], carrier: ['ball carrier', 'carrier', 'ballcarrier', 'player'],
-  yardLn: ['yard ln', 'yard line', 'yardline'], type: ['play type', 'type', 'run pass'], result: ['result', 'outcome'], form: ['off form', 'formation', 'offensive formation'],
+  yardLn: ['yard ln', 'yard line', 'yardline'], startYardLn: ['start yard ln', 'start yard line', 'start'], type: ['play type', 'type', 'run pass'], result: ['result', 'outcome'], form: ['off form', 'formation', 'offensive formation'],
   defense: ['defense', 'def front', 'front'], motion: ['motion'], offPlay: ['off play', 'play call', 'offensive play'], personnel: ['personnel', 'personnel group', 'offensive personnel'], scheme: ['scheme', 'offensive scheme', 'defensive scheme'], dir: ['play dir', 'direction', 'play direction'],
   backfield: ['backfield'],
 };
