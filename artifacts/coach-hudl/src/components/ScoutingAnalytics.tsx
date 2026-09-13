@@ -170,6 +170,7 @@ export const ScoutingAnalytics: React.FC<ScoutingAnalyticsProps> = ({ plays, onD
     });
   }, [plays, filters]);
 
+  const allMetrics = useMemo(() => calculateMetrics(plays), [plays]);
   const metrics = useMemo(() => calculateMetrics(filteredPlays), [filteredPlays]);
 
   const formationTendencies = useMemo((): FormationTendency[] => {
@@ -356,7 +357,76 @@ export const ScoutingAnalytics: React.FC<ScoutingAnalyticsProps> = ({ plays, onD
       {/* OVERVIEW */}
       {view === 'overview' && (
         <div className="analytics-view">
-          <div className="metrics-grid">
+          {/* DASHBOARD: ALL PLAYS vs FILTERED PLAYS */}
+          <div className="dashboard-section">
+            <h3 style={{ marginTop: 0, marginBottom: 16, fontSize: 14, fontWeight: 600, color: '#333' }}>
+              Baseline Comparison (All Plays vs Filtered)
+            </h3>
+            <div className="paired-metrics-grid">
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">TOTAL PLAYS (ALL)</div>
+                <div className="metric-pair-label filtered-label">TOTAL PLAYS (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{allMetrics.total}</span>
+                  <span className="filtered-value">{metrics.total}</span>
+                </div>
+              </div>
+
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">RUN % (ALL)</div>
+                <div className="metric-pair-label filtered-label">RUN % (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{(allMetrics.runPct * 100).toFixed(1)}%</span>
+                  <span className="filtered-value" style={{ color: metrics.runPct >= 0.6 ? '#276A3C' : '#333', fontWeight: metrics.runPct >= 0.6 ? 'bold' : 'normal' }}>
+                    {(metrics.runPct * 100).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">PASS % (ALL)</div>
+                <div className="metric-pair-label filtered-label">PASS % (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{(allMetrics.passPct * 100).toFixed(1)}%</span>
+                  <span className="filtered-value" style={{ color: metrics.passPct >= 0.6 ? '#1F4E78' : '#333', fontWeight: metrics.passPct >= 0.6 ? 'bold' : 'normal' }}>
+                    {(metrics.passPct * 100).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">AVG GAIN (ALL)</div>
+                <div className="metric-pair-label filtered-label">AVG GAIN (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{allMetrics.avgGain.toFixed(1)}</span>
+                  <span className="filtered-value">{metrics.avgGain.toFixed(1)}</span>
+                </div>
+              </div>
+
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">SUCCESS RATE (ALL)</div>
+                <div className="metric-pair-label filtered-label">SUCCESS RATE (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{(allMetrics.successRate * 100).toFixed(1)}%</span>
+                  <span className="filtered-value" style={{ color: metrics.successRate >= 0.5 ? '#276A3C' : '#D32F2F', fontWeight: 'bold' }}>
+                    {(metrics.successRate * 100).toFixed(1)}%
+                  </span>
+                </div>
+              </div>
+
+              <div className="paired-metric">
+                <div className="metric-pair-label all-label">EXPLOSIVE RATE (ALL)</div>
+                <div className="metric-pair-label filtered-label">EXPLOSIVE RATE (FILTERED)</div>
+                <div className="metric-pair-value">
+                  <span className="all-value">{(allMetrics.explosiveRate * 100).toFixed(1)}%</span>
+                  <span className="filtered-value">{(metrics.explosiveRate * 100).toFixed(1)}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ORIGINAL METRICS GRID */}
+          <div className="metrics-grid" style={{ marginTop: 32 }}>
             <MetricsCard label="TOTAL PLAYS" value={String(metrics.total)} note="in current filters" />
             <MetricsCard label="RUN %" value={`${(metrics.runPct * 100).toFixed(1)}%`} note="run tendencies" />
             <MetricsCard
@@ -787,6 +857,67 @@ export const ScoutingAnalytics: React.FC<ScoutingAnalyticsProps> = ({ plays, onD
           .analytics-table td {
             padding: 8px 6px;
           }
+        }
+
+        .dashboard-section {
+          background: #fafbfc;
+          border: 1px solid #e0e0e0;
+          border-radius: 6px;
+          padding: 20px;
+          margin-bottom: 24px;
+        }
+
+        .paired-metrics-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+          gap: 16px;
+        }
+
+        .paired-metric {
+          background: white;
+          border: 1px solid #e0e0e0;
+          border-radius: 6px;
+          padding: 16px;
+          text-align: center;
+        }
+
+        .metric-pair-label {
+          display: block;
+          font-size: 10px;
+          font-weight: 600;
+          text-transform: uppercase;
+          margin-bottom: 8px;
+          letter-spacing: 0.5px;
+        }
+
+        .all-label {
+          color: #999;
+        }
+
+        .filtered-label {
+          color: #4169E1;
+          font-weight: 700;
+        }
+
+        .metric-pair-value {
+          display: flex;
+          justify-content: space-around;
+          align-items: center;
+          gap: 12px;
+        }
+
+        .all-value {
+          font-size: 20px;
+          font-weight: 700;
+          color: #666;
+          flex: 1;
+        }
+
+        .filtered-value {
+          font-size: 20px;
+          font-weight: 700;
+          color: #4169E1;
+          flex: 1;
         }
       `}</style>
     </div>
