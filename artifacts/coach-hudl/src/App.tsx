@@ -308,9 +308,9 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
         <div className="brand">
-          <div className="brand-mark">H</div>
+          <div className="brand-mark">CC</div>
           <div className="brand-name">
-            coach<span>hudl</span>
+            coach<span>Connect</span>
           </div>
         </div>
         <div className="nav-label eyebrow">Workspace</div>
@@ -346,7 +346,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
             <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation">
               <Menu />
             </button>
-            <span>Coach Hudl workspace</span>
+            <span>Coach Connect workspace</span>
           </div>
 
           <div className="topbar-actions" style={{ gap: 10 }}>
@@ -941,7 +941,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   const handleFile = (file?: File) => { if (!file) return; setLoading(true); const reader = new FileReader(); reader.onload = () => { const parsed = parseCsv(String(reader.result ?? '')); setPreview(parsed.slice(0, 12)); if (parsed.length) { const next = { ...data, [target]: parsed }; setData(next); toast.notify(`${parsed.length} plays normalized into ${target} board`); } else toast.notify('No readable play rows found in that file'); setLoading(false); }; reader.onerror = () => { setLoading(false); toast.notify('Could not read that file'); }; reader.readAsText(file); };
   const loadDemo = () => { const next = { ...data, scouting: demoScouting }; setData(next); setPreview(demoScouting.slice(0, 12)); toast.notify('Demo scout loaded · 15 plays ready to study'); };
   const clear = (which: 'scouting' | 'live') => { const next = { ...data, [which]: [] }; setData(next); if (target === which) setPreview([]); toast.notify(`${which === 'scouting' ? 'Scouting' : 'Live'} board cleared`); };
-  return <div className="content"><PageHead eyebrow="Data room · ingest & normalize" title="Bring in the tape." description="Start with a Sheets export or a live chart. Coach Hudl maps common headers and keeps your board local to this device." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Import CSV</button>} />
+  return <div className="content"><PageHead eyebrow="Data room · ingest & normalize" title="Bring in the tape." description="Start with a Sheets export or a live chart. Coach Connect maps common headers and keeps your board local to this device." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Import CSV</button>} />
     <input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => handleFile(event.target.files?.[0])} data-testid="input-csv-file" />
     <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .42fr)' }}>
       <div className="grid"><Panel><div className="filters"><button className={`btn ${target === 'scouting' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setTarget('scouting'); setPreview(data.scouting.slice(0, 12)); }} data-testid="button-target-scouting"><Shield /> Scouting board</button><button className={`btn ${target === 'live' ? 'btn-green' : 'btn-ghost'}`} onClick={() => { setTarget('live'); setPreview(data.live.slice(0, 12)); }} data-testid="button-target-live"><Zap /> Live board</button><span className="eyebrow" style={{ marginLeft: 'auto' }}>{target === 'scouting' ? data.scouting.length : data.live.length} plays saved</span></div><div className="upload-zone" onClick={() => fileRef.current?.click()} role="button" tabIndex={0} onKeyDown={event => event.key === 'Enter' && fileRef.current?.click()} data-testid="dropzone-csv"><div className="upload-icon">{loading ? <RefreshCw className="animate-spin" /> : <UploadCloud />}</div><h3>{loading ? 'Normalizing your rows…' : 'Drop a CSV here'}</h3><p>Exports from Google Sheets, Hudl, or your charting workflow. Headers are matched automatically.</p><button className="btn btn-primary" onClick={event => { event.stopPropagation(); fileRef.current?.click(); }} data-testid="button-choose-csv">Choose file</button></div></Panel>
@@ -1859,7 +1859,7 @@ function HudlCsvExportBar() {
         disabled={busy}
         onClick={() => exportHudlCsv(isLive ? 'live' : 'scouting')}
         className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-        title={isLive ? 'Export the current Live Game as Hudl CSV' : 'Export the current Data Room plays as Hudl CSV'}
+        title={isLive ? 'Export the current Live Game as Connect CSV' : 'Export the current Data Room plays as Connect CSV'}
       >
         <Download size={16} />
         {isLive ? 'Hudl CSV — Live Game' : 'Hudl CSV — Data Room'}
