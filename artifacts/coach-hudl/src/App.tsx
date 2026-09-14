@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
 import { isSupabaseConfigured } from './lib/supabase';
+import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
 import {
   Activity,
   AlertTriangle,
@@ -1819,6 +1820,54 @@ function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Datase
 
 function NotFoundPage() { return <div className="content"><PageHead eyebrow="404 · off the board" title="That page isn't charted." description="Use the workspace navigation to get back into the film room." actions={<Link href="/" className="btn btn-primary" data-testid="link-not-found-home"><LayoutDashboard /> Back to overview</Link>} /></div>; }
 
+
+function HudlCsvExportBar() {
+  const [location] = useLocation();
+  const [busy, setBusy] = useState(false);
+
+  const route = location.split('?')[0];
+  const isLive = route === '/live';
+  const isDataRoom = route === '/scout' || route === '/reports';
+  if (!isLive && !isDataRoom) return null;
+
+  function exportHudlCsv(kind: 'live' | 'scouting') {
+    setBusy(true);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
+      if (!raw) return;
+      const data = JSON.parse(raw) as Dataset;
+      const game = data.schedule?.find(item => item.id === data.activeGameId);
+      const gameData = data.gameData?.[data.activeGameId];
+      const plays = kind === 'live' ? (gameData?.live ?? data.live ?? []) : (gameData?.scouting ?? data.scouting ?? []);
+      if (!plays.length) {
+        window.alert(kind === 'live' ? 'There are no live plays to export yet.' : 'There are no Data Room plays to export yet.');
+        return;
+      }
+      const prefix = game
+        ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
+        : new Date().toISOString().slice(0, 10);
+      download(hudlCsvFilename(prefix, kind === 'live' ? 'LiveGame' : 'DataRoom'), standardPlaysToHudlCsv(plays));
+    } finally {
+      window.setTimeout(() => setBusy(false), 250);
+    }
+  }
+
+  return (
+    <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => exportHudlCsv(isLive ? 'live' : 'scouting')}
+        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
+        title={isLive ? 'Export the current Live Game as Hudl CSV' : 'Export the current Data Room plays as Hudl CSV'}
+      >
+        <Download size={16} />
+        {isLive ? 'Hudl CSV — Live Game' : 'Hudl CSV — Data Room'}
+      </button>
+    </div>
+  );
+}
+
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
   const [loadingFromSupabase, setLoadingFromSupabase] = useState(isSupabaseConfigured);
@@ -1961,6 +2010,7 @@ function Router() {
 
   return (
     <AppShell data={data} setData={setData}>
+      <HudlCsvExportBar />
       <Switch>
         <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>

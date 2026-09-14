@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const appPath = path.join(root, 'src', 'App.tsx');
+const appPath = path.join(root, 'artifacts', 'coach-hudl', 'src', 'App.tsx');
 let source = fs.readFileSync(appPath, 'utf8');
 
 const importLine = "import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';";
