@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm build *)",
+      "Bash(./node_modules/.bin/vite build *)",
+      "Bash(node -e ' *)"
+    ]
+  }
+}
