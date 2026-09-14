@@ -950,14 +950,576 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   </div>;
 }
 
+// ---------------------------------------------------------------------------
+// Scouting report engine — ported from the Kangaroos Apps Script workbook.
+// Mirrors DASHBOARD, FORMATION REPORT, FORMATION DETAIL, MULTI FORMATION REPORT
+// and FORMATION PLAY BY PLAY, including their metric definitions.
+// ---------------------------------------------------------------------------
+type ScoutView = 'dashboard' | 'formations' | 'detail' | 'multi' | 'pbp';
+type ScoutSummary = {
+  count: number; pctTotal: number; runPct: number; passPct: number; avgGain: number; successRate: number;
+  explosiveRate: number; topScheme: string; topRun: string; topPass: string; topBackfield: string;
+};
+type ConceptRow = { name: string; type: 'RUN' | 'PASS'; count: number; pctTotal: number; avgGain: number; successRate: number; explosiveRate: number };
+
+const SCOUT_ALL = 'ALL';
+const UNCLASSIFIED_ZONE = 'UNCLASSIFIED';
+const FIELD_ZONES = ['BACKED UP (Own 1-10)', 'OWN TERRITORY (Own 11-39)', 'MIDFIELD (Own 40 - Opp 40)', 'RED ZONE (Opp 11-39)', 'GOAL LINE (Opp 1-10)'];
+const DISTANCE_BUCKETS = ['1-3 (SHORT)', '4-7 (MEDIUM)', '8+ (LONG)'];
+const SUMMARY_COLUMNS = ['SNAPS', '% OF TOTAL', 'RUN %', 'PASS %', 'AVG YDS', 'SUCCESS %', 'TOP SCHEME', 'TOP RUN', 'TOP PASS', 'PRIMARY BACKFIELD'];
+const SCOUT_VIEWS: { key: ScoutView; label: string; icon: typeof LayoutDashboard }[] = [
+  { key: 'dashboard', label: 'Dashboard', icon: Gauge },
+  { key: 'formations', label: 'Formation report', icon: Layers },
+  { key: 'detail', label: 'Formation detail', icon: Compass },
+  { key: 'multi', label: 'Multi formation', icon: Split },
+  { key: 'pbp', label: 'Play by play', icon: ClipboardList },
+];
+const DOWN_DISTANCE_SITUATIONS: { label: string; match: (play: Play) => boolean }[] = [
+  { label: '1ST & 10+', match: p => num(p.dn) === 1 && num(p.dist) >= 10 },
+  { label: '1ST & SHORT (1-9)', match: p => num(p.dn) === 1 && num(p.dist) < 10 },
+  { label: '2ND & LONG (8+)', match: p => num(p.dn) === 2 && num(p.dist) >= 8 },
+  { label: '2ND & MED (4-7)', match: p => num(p.dn) === 2 && num(p.dist) >= 4 && num(p.dist) <= 7 },
+  { label: '2ND & SHORT (1-3)', match: p => num(p.dn) === 2 && num(p.dist) <= 3 },
+  { label: '3RD & LONG (7+)', match: p => num(p.dn) === 3 && num(p.dist) >= 7 },
+  { label: '3RD & MED (3-6)', match: p => num(p.dn) === 3 && num(p.dist) >= 3 && num(p.dist) <= 6 },
+  { label: '3RD & SHORT / 4TH', match: p => (num(p.dn) === 3 && num(p.dist) <= 2) || num(p.dn) === 4 },
+];
+const RUN_CELL: CSSProperties = { background: 'rgba(31,201,139,.1)', color: '#63e6b4', fontWeight: 700 };
+const PASS_CELL: CSSProperties = { background: 'rgba(164,123,255,.1)', color: '#cbb5ff', fontWeight: 700 };
+
+const scoutText = (value: string | undefined) => String(value ?? '').trim().toUpperCase();
+const scoutIsRun = (play: Play) => { const type = scoutText(play.type); return type.startsWith('RUN') || type === 'R'; };
+const scoutIsPass = (play: Play) => { const type = scoutText(play.type); return type.startsWith('PASS') || type === 'P'; };
+const scoutIsExplosive = (play: Play) => num(play.gnls) >= 12;
+function scoutIsSuccess(play: Play) {
+  const down = num(play.dn); const dist = num(play.dist); const gain = num(play.gnls);
+  if (down === 1) return gain >= 4;
+  if (down === 2) return gain >= dist / 2;
+  if (down >= 3) return gain >= dist;
+  return gain >= 4;
+}
+function distanceBucket(dist: number) {
+  if (dist >= 1 && dist <= 3) return DISTANCE_BUCKETS[0];
+  if (dist >= 4 && dist <= 7) return DISTANCE_BUCKETS[1];
+  return dist >= 8 ? DISTANCE_BUCKETS[2] : '';
+}
+// Own-side yard lines are negative, opponent-side positive (see normalizeYardLine).
+function classifyYardLine(value: string) {
+  const normalized = normalizeYardLine(value);
+  if (!/^-?\d{1,3}$/.test(normalized)) return UNCLASSIFIED_ZONE;
+  const yard = Number(normalized);
+  if (Math.abs(yard) > 100) return UNCLASSIFIED_ZONE;
+  if (yard < 0) { const own = Math.abs(yard); return own <= 10 ? FIELD_ZONES[0] : own <= 39 ? FIELD_ZONES[1] : FIELD_ZONES[2]; }
+  if (yard === 0) return FIELD_ZONES[2];
+  return yard <= 10 ? FIELD_ZONES[4] : yard <= 39 ? FIELD_ZONES[3] : FIELD_ZONES[2];
+}
+function isMeaningful(value: string) {
+  const upper = scoutText(value);
+  return Boolean(upper) && upper !== '—' && upper !== '-' && upper !== '0' && upper !== 'UNSPECIFIED' && !upper.includes('SELECT');
+}
+// Grouping is case-insensitive so sloppy entry ("DROP BACK" / "Drop Back") lands in one row.
+function countBy(values: string[]) {
+  const counts = new Map<string, number>();
+  for (const raw of values) { const value = scoutText(raw); if (!isMeaningful(value)) continue; counts.set(value, (counts.get(value) ?? 0) + 1); }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+const topValue = (values: string[]) => countBy(values)[0]?.[0] ?? '—';
+const topValues = (values: string[], take: number) => countBy(values).slice(0, take).map(entry => entry[0]).join(', ') || '—';
+function summarize(plays: Play[], base: number): ScoutSummary {
+  const count = plays.length;
+  const runs = plays.filter(scoutIsRun);
+  const passes = plays.filter(scoutIsPass);
+  return {
+    count,
+    pctTotal: base ? count / base : 0,
+    runPct: count ? runs.length / count : 0,
+    passPct: count ? passes.length / count : 0,
+    avgGain: count ? plays.reduce((sum, play) => sum + num(play.gnls), 0) / count : 0,
+    successRate: count ? plays.filter(scoutIsSuccess).length / count : 0,
+    explosiveRate: count ? plays.filter(scoutIsExplosive).length / count : 0,
+    topScheme: topValue(plays.map(play => play.scheme)),
+    topRun: topValue(runs.map(play => play.offPlay)),
+    topPass: topValue(passes.map(play => play.offPlay)),
+    topBackfield: topValue(plays.map(play => play.backfield)),
+  };
+}
+function optionsFor(plays: Play[], pick: (play: Play) => string) {
+  const values = new Set<string>();
+  for (const play of plays) { const value = scoutText(pick(play)); if (isMeaningful(value)) values.add(value); }
+  return [SCOUT_ALL, ...[...values].sort((a, b) => a.localeCompare(b))];
+}
+const pctText = (value: number) => `${(value * 100).toFixed(1)}%`;
+const roundPct = (value: number) => Math.round(value * 100);
+const decText = (value: number) => value.toFixed(1);
+const matchesAll = (filter: string) => !filter || filter === SCOUT_ALL;
+const conceptKey = (play: Play) => { const call = String(play.offPlay ?? '').trim(); return isMeaningful(call) ? call : String(play.scheme ?? '').trim(); };
+
+function ScoutFilter({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+  return (
+    <div className="field">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value} onChange={event => onChange(event.target.value)} data-testid={id}>
+        {options.map(option => <option key={option} value={option}>{option}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function SummaryTable({ label, rows, testId }: { label: string; rows: { name: string; summary: ScoutSummary }[]; testId: string }) {
+  return (
+    <div className="table-wrap">
+      <table className="data-table" style={{ minWidth: 1040 }} data-testid={testId}>
+        <thead><tr><th>{label}</th>{SUMMARY_COLUMNS.map(column => <th key={column}>{column}</th>)}</tr></thead>
+        <tbody>
+          {rows.map(row => (
+            <tr key={row.name}>
+              <td><strong>{row.name}</strong></td>
+              <td>{row.summary.count}</td>
+              <td>{pctText(row.summary.pctTotal)}</td>
+              <td style={row.summary.count && row.summary.runPct >= 0.7 ? RUN_CELL : undefined}>{pctText(row.summary.runPct)}</td>
+              <td style={row.summary.count && row.summary.passPct >= 0.7 ? PASS_CELL : undefined}>{pctText(row.summary.passPct)}</td>
+              <td>{decText(row.summary.avgGain)}</td>
+              <td>{pctText(row.summary.successRate)}</td>
+              <td>{row.summary.topScheme}</td>
+              <td>{row.summary.topRun}</td>
+              <td>{row.summary.topPass}</td>
+              <td>{row.summary.topBackfield}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function ScoutVerdict({ verdict, tone }: { verdict: string; tone: 'run' | 'pass' | 'balanced' | 'none' }) {
+  const palette: Record<typeof tone, CSSProperties> = {
+    run: { background: 'rgba(31,201,139,.08)', borderColor: 'rgba(31,201,139,.26)', color: '#8df0c4' },
+    pass: { background: 'rgba(164,123,255,.08)', borderColor: 'rgba(164,123,255,.26)', color: '#cbb5ff' },
+    balanced: { background: 'rgba(255,255,255,.035)', borderColor: 'hsl(var(--border))', color: '#eeeaf7' },
+    none: { background: 'rgba(255,255,255,.02)', borderColor: 'hsl(var(--border))', color: 'hsl(var(--muted-foreground))' },
+  };
+  const Icon = tone === 'run' || tone === 'pass' ? AlertTriangle : Compass;
+  return (
+    <div className="callout" style={{ ...palette[tone], fontSize: 13, fontWeight: 700 }} data-testid="banner-scout-verdict">
+      <Icon style={{ color: 'inherit' }} />
+      <span>{verdict}</span>
+    </div>
+  );
+}
+
 function ScoutPage({ data }: { data: Dataset }) {
-  const [typeFilter, setTypeFilter] = useState('All'); const [search, setSearch] = useState(''); const plays = useMemo(() => data.scouting.filter(play => (typeFilter === 'All' || play.type.toLowerCase().includes(typeFilter.toLowerCase())) && Object.values(play).some(value => value.toLowerCase().includes(search.toLowerCase()))), [data.scouting, typeFilter, search]);
-  const source = data.scouting; const runPlays = source.filter(p => p.type.toLowerCase().includes('run')); const passPlays = source.filter(p => p.type.toLowerCase().includes('pass')); const formations = ['11 Personnel', '12 Personnel', 'Empty']; const formationCounts = formations.map(form => source.filter(p => p.form === form).length);
-  const topFormationFavorites = formations.map(form => { const formationPlays = source.filter(play => play.form === form); const counts = Array.from(new Set(formationPlays.map(play => play.offPlay))).map(offPlay => ({ offPlay, count: formationPlays.filter(play => play.offPlay === offPlay).length })); return { form, total: formationPlays.length, favorite: counts.sort((a, b) => b.count - a.count)[0] }; }).filter(row => row.favorite).sort((a, b) => b.total - a.total).slice(0, 3);
-  const fieldZones = [{ label: 'Backed up', filter: (p: Play) => num(p.yardLn) <= 20 }, { label: 'Middle third', filter: (p: Play) => num(p.yardLn) > 20 && num(p.yardLn) < 50 }, { label: 'Red zone', filter: (p: Play) => p.yardLn.toLowerCase().includes('opp 2') || p.yardLn.toLowerCase().includes('opp 5') }];
-  return <div className="content"><PageHead eyebrow="Scouting · tendency board" title="Find the tell." description="Turn every snap into a decision. Filter the noise, then take the strongest pattern into the room." actions={<Link href="/reports" className="btn btn-primary" data-testid="link-scout-reports"><ClipboardList /> Build report</Link>} /><div className="filters"><div style={{ position: 'relative' }}><Search size={15} style={{ position: 'absolute', left: 11, top: 10, color: '#77758a' }} /><input className="input" style={{ paddingLeft: 33, width: 220 }} placeholder="Search chart…" value={search} onChange={event => setSearch(event.target.value)} aria-label="Search scouting plays" data-testid="input-scout-search" /></div><select value={typeFilter} onChange={event => setTypeFilter(event.target.value)} aria-label="Filter play type" data-testid="select-scout-type"><option>All</option><option>Run</option><option>Pass</option></select><span className="eyebrow">{plays.length} matching snaps</span></div>
-    <div className="grid split-grid"><Panel><SectionTitle title="Run / pass splits" detail="Averages by play type" /><div className="trend-row"><div className="trend-head"><span>Run calls <small>({runPlays.length})</small></span><span>{source.length ? Math.round(runPlays.length / source.length * 100) : 0}%</span></div><div className="progress green"><span style={{ width: `${source.length ? runPlays.length / source.length * 100 : 0}%` }} /></div></div><div className="trend-row"><div className="trend-head"><span>Pass calls <small>({passPlays.length})</small></span><span>{source.length ? Math.round(passPlays.length / source.length * 100) : 0}%</span></div><div className="progress"><span style={{ width: `${source.length ? passPlays.length / source.length * 100 : 0}%` }} /></div><div className="trend-head" style={{ marginTop: 16 }}><span>Run yards / call</span><span>{average(runPlays)}</span></div><div className="trend-head"><span>Pass yards / call</span><span>{average(passPlays)}</span></div></div></Panel><Panel><SectionTitle title="Top formations" detail="What they line up in" />{formations.map((form, i) => <div className="trend-row" key={form}><div className="trend-head"><span>{form}</span><span>{formationCounts[i]}</span></div><div className="progress"><span style={{ width: `${source.length ? formationCounts[i] / source.length * 100 : 0}%` }} /></div></div>)}<div className="callout"><CircleAlert />11 personnel carries the highest volume. Expect motion from the slot before the snap.</div></Panel><Panel><SectionTitle title="Field zone profile" detail="Where the calls happen" />{fieldZones.map(zone => { const count = source.filter(zone.filter).length; return <div className="trend-row" key={zone.label}><div className="trend-head"><span>{zone.label}</span><span>{count} snaps</span></div><div className="progress green"><span style={{ width: `${source.length ? count / source.length * 100 : 0}%` }} /></div></div>; })}</Panel><Panel><SectionTitle title="Favorite 3 plays" detail="One favorite call from each top formation" />{topFormationFavorites.length ? topFormationFavorites.map(row => <div className="trend-row" key={row.form}><div className="trend-head"><span>{row.form}</span><span>{row.favorite?.offPlay}</span></div><div className="progress green"><span style={{ width: `${row.total ? row.favorite!.count / row.total * 100 : 0}%` }} /></div><div className="kpi-note">{row.favorite?.count} of {row.total} calls · {row.favorite?.count && row.total ? Math.round(row.favorite.count / row.total * 100) : 0}% of formation snaps</div></div>) : <div className="empty"><Sparkles size={28} /><h3>No formation calls yet</h3><p>Import or load scouting data to see the favorite call from each top formation.</p></div>}</Panel></div>
-    <Panel className="fade-in" pad={false} style={{ marginTop: 14 }}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Play call ledger" detail="Normalized snap-by-snap view" /></div>{plays.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Situation</th><th>Type / call</th><th>Personnel</th><th>Direction</th><th>Gain / loss</th><th>Defense</th></tr></thead><tbody>{plays.map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-scout-${i}`}><td><strong>#{play.playNo}</strong></td><td>{play.dn}&amp;{play.dist} · {play.hash}</td><td><span className={`tag ${play.type.toLowerCase().includes('run') ? 'green' : ''}`}>{play.type}</span> <span style={{ marginLeft: 7 }}>{play.offPlay}</span></td><td>{play.form}</td><td>{play.dir}</td><td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td><td>{play.defense} · {play.scheme}</td></tr>)}</tbody></table></div> : <div className="empty"><Search size={28} /><h3>Nothing matches that filter</h3><p>Try clearing your search or loading the demo board.</p></div>}</Panel>
+  const source = data.scouting;
+  const [view, setView] = useState<ScoutView>('dashboard');
+  const [search, setSearch] = useState('');
+
+  // DASHBOARD yellow-cell filters (Apps Script rows 3-7, columns B / E / H / K).
+  const [fOdk, setFOdk] = useState(SCOUT_ALL);
+  const [fFormation, setFFormation] = useState(SCOUT_ALL);
+  const [fPersonnel, setFPersonnel] = useState(SCOUT_ALL);
+  const [fScheme, setFScheme] = useState(SCOUT_ALL);
+  const [fDown, setFDown] = useState(SCOUT_ALL);
+  const [fPlayType, setFPlayType] = useState(SCOUT_ALL);
+  const [fBackfield, setFBackfield] = useState(SCOUT_ALL);
+  const [fOffPlay, setFOffPlay] = useState(SCOUT_ALL);
+  const [fDistance, setFDistance] = useState(SCOUT_ALL);
+  const [fMotion, setFMotion] = useState(SCOUT_ALL);
+  const [fPlayDir, setFPlayDir] = useState(SCOUT_ALL);
+  const [fHash, setFHash] = useState(SCOUT_ALL);
+
+  const formationList = useMemo(() => optionsFor(source, play => play.form).slice(1), [source]);
+  const formationCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const play of source) { const form = scoutText(play.form); if (isMeaningful(form)) counts.set(form, (counts.get(form) ?? 0) + 1); }
+    return counts;
+  }, [source]);
+  const rankedFormations = useMemo(
+    () => [...formationList].sort((a, b) => (formationCounts.get(b) ?? 0) - (formationCounts.get(a) ?? 0)),
+    [formationList, formationCounts],
+  );
+
+  const filtered = useMemo(() => source.filter(play => {
+    if (search && !Object.values(play).some(value => String(value ?? '').toLowerCase().includes(search.toLowerCase()))) return false;
+    if (!matchesAll(fOdk) && normalizeOdk(play.odk) !== fOdk) return false;
+    if (!matchesAll(fFormation) && scoutText(play.form) !== scoutText(fFormation)) return false;
+    if (!matchesAll(fPersonnel) && scoutText(play.personnel) !== scoutText(fPersonnel)) return false;
+    if (!matchesAll(fScheme) && scoutText(play.scheme) !== scoutText(fScheme)) return false;
+    if (!matchesAll(fDown) && String(num(play.dn)) !== fDown) return false;
+    if (!matchesAll(fPlayType) && !scoutText(play.type).startsWith(scoutText(fPlayType))) return false;
+    if (!matchesAll(fBackfield) && scoutText(play.backfield) !== scoutText(fBackfield)) return false;
+    if (!matchesAll(fOffPlay) && !scoutText(play.offPlay).includes(scoutText(fOffPlay))) return false;
+    if (!matchesAll(fDistance) && distanceBucket(num(play.dist)) !== fDistance) return false;
+    if (!matchesAll(fMotion) && scoutText(play.motion) !== scoutText(fMotion)) return false;
+    if (!matchesAll(fPlayDir) && !scoutText(play.dir).includes(scoutText(fPlayDir))) return false;
+    if (!matchesAll(fHash) && !scoutText(play.hash).includes(scoutText(fHash))) return false;
+    return true;
+  }), [source, search, fOdk, fFormation, fPersonnel, fScheme, fDown, fPlayType, fBackfield, fOffPlay, fDistance, fMotion, fPlayDir, fHash]);
+
+  const allMetrics = useMemo(() => summarize(source, source.length), [source]);
+  const filteredMetrics = useMemo(() => summarize(filtered, filtered.length), [filtered]);
+
+  const resetFilters = () => {
+    setSearch(''); setFOdk(SCOUT_ALL); setFFormation(SCOUT_ALL); setFPersonnel(SCOUT_ALL); setFScheme(SCOUT_ALL);
+    setFDown(SCOUT_ALL); setFPlayType(SCOUT_ALL); setFBackfield(SCOUT_ALL); setFOffPlay(SCOUT_ALL);
+    setFDistance(SCOUT_ALL); setFMotion(SCOUT_ALL); setFPlayDir(SCOUT_ALL); setFHash(SCOUT_ALL);
+  };
+
+  // DASHBOARD · formation tendencies + play concept breakdown (top 8 each).
+  const dashboardFormations = useMemo(
+    () => formationList.map(form => ({ name: form, summary: summarize(filtered.filter(play => scoutText(play.form) === scoutText(form)), filtered.length) }))
+      .filter(row => row.summary.count > 0).sort((a, b) => b.summary.count - a.summary.count).slice(0, 8),
+    [formationList, filtered],
+  );
+  const dashboardConcepts = useMemo<ConceptRow[]>(() => {
+    const groups = new Map<string, Play[]>();
+    for (const play of filtered) { const key = conceptKey(play); if (!isMeaningful(key)) continue; groups.set(key, [...(groups.get(key) ?? []), play]); }
+    return [...groups.entries()].map(([name, plays]) => {
+      const summary = summarize(plays, filtered.length);
+      const runs = plays.filter(scoutIsRun).length;
+      return { name, type: runs >= plays.length - runs ? 'RUN' : 'PASS', count: summary.count, pctTotal: summary.pctTotal, avgGain: summary.avgGain, successRate: summary.successRate, explosiveRate: summary.explosiveRate } as ConceptRow;
+    }).sort((a, b) => b.count - a.count).slice(0, 8);
+  }, [filtered]);
+
+  // FORMATION REPORT · every formation across the whole chart, unfiltered.
+  const formationReport = useMemo(
+    () => formationList.map(form => ({ name: form, summary: summarize(source.filter(play => scoutText(play.form) === scoutText(form)), source.length) }))
+      .sort((a, b) => b.summary.count - a.summary.count),
+    [formationList, source],
+  );
+
+  // FORMATION DETAIL · one formation drilled by field zone.
+  const [detailFormation, setDetailFormation] = useState(SCOUT_ALL);
+  const [detailZone, setDetailZone] = useState(SCOUT_ALL);
+  const detailTarget = useMemo(
+    () => matchesAll(detailFormation) ? source : source.filter(play => scoutText(play.form) === scoutText(detailFormation)),
+    [source, detailFormation],
+  );
+  const detailActive = useMemo(
+    () => matchesAll(detailZone) ? detailTarget : detailTarget.filter(play => classifyYardLine(play.yardLn) === detailZone),
+    [detailTarget, detailZone],
+  );
+  const detailProfile = useMemo(() => summarize(detailActive, source.length), [detailActive, source.length]);
+  const detailSituations = useMemo(
+    () => DOWN_DISTANCE_SITUATIONS.map(situation => ({ name: situation.label, summary: summarize(detailActive.filter(situation.match), detailActive.length) })),
+    [detailActive],
+  );
+  // Zone table always spans the whole field so the staff sees every bucket, per the workbook.
+  const detailZones = useMemo(() => {
+    const zones = FIELD_ZONES.map(zone => ({ name: zone, summary: summarize(detailTarget.filter(play => classifyYardLine(play.yardLn) === zone), detailTarget.length) }));
+    const unclassified = detailTarget.filter(play => classifyYardLine(play.yardLn) === UNCLASSIFIED_ZONE);
+    return unclassified.length ? [...zones, { name: 'UNCLASSIFIED (no yard line)', summary: summarize(unclassified, detailTarget.length) }] : zones;
+  }, [detailTarget]);
+
+  // MULTI FORMATION REPORT · combine any set of formations, then read the tells.
+  const [excludedForms, setExcludedForms] = useState<Set<string>>(new Set());
+  const [multiBackfield, setMultiBackfield] = useState(SCOUT_ALL);
+  const [multiMotion, setMultiMotion] = useState(SCOUT_ALL);
+  const [multiPlayType, setMultiPlayType] = useState(SCOUT_ALL);
+  const selectedForms = useMemo(() => rankedFormations.filter(form => !excludedForms.has(form)), [rankedFormations, excludedForms]);
+  const toggleForm = (form: string) => setExcludedForms(previous => {
+    const next = new Set(previous);
+    if (next.has(form)) next.delete(form); else next.add(form);
+    return next;
+  });
+  const allFormsSelected = selectedForms.length === rankedFormations.length;
+  const multiPlays = useMemo(() => {
+    const selected = new Set(selectedForms.map(scoutText));
+    return source.filter(play => selected.has(scoutText(play.form))
+      && (matchesAll(multiBackfield) || scoutText(play.backfield) === scoutText(multiBackfield))
+      && (matchesAll(multiMotion) || scoutText(play.motion) === scoutText(multiMotion))
+      && (matchesAll(multiPlayType) || scoutText(play.type).startsWith(scoutText(multiPlayType))));
+  }, [source, selectedForms, multiBackfield, multiMotion, multiPlayType]);
+  const multiSummary = useMemo(() => summarize(multiPlays, source.length), [multiPlays, source.length]);
+  const multiSituations = useMemo(
+    () => DOWN_DISTANCE_SITUATIONS.map(situation => ({ name: situation.label, summary: summarize(multiPlays.filter(situation.match), multiPlays.length) })),
+    [multiPlays],
+  );
+  const multiVerdict = useMemo<{ text: string; tone: 'run' | 'pass' | 'balanced' | 'none' }>(() => {
+    if (!multiPlays.length) return { text: 'NO PLAYS MATCH CURRENT SELECTIONS', tone: 'none' };
+    if (multiSummary.runPct >= 0.65) return { text: `RUN-HEAVY SET (${roundPct(multiSummary.runPct)}% RUN) — LOAD THE BOX`, tone: 'run' };
+    if (multiSummary.passPct >= 0.65) return { text: `PASS-HEAVY SET (${roundPct(multiSummary.passPct)}% PASS) — PASS COVERAGE ALERT`, tone: 'pass' };
+    return { text: 'BALANCED FORMATION SET', tone: 'balanced' };
+  }, [multiPlays.length, multiSummary]);
+  const backfieldTells = useMemo(() => countBy(multiPlays.map(play => play.backfield)).slice(0, 2).map(([name]) => {
+    const rows = multiPlays.filter(play => scoutText(play.backfield) === name);
+    const runPct = rows.length ? rows.filter(scoutIsRun).length / rows.length : 0;
+    const passPct = rows.length ? rows.filter(scoutIsPass).length / rows.length : 0;
+    const bias = runPct >= 0.6 ? `${roundPct(runPct)}% RUN` : passPct >= 0.6 ? `${roundPct(passPct)}% PASS` : 'BALANCED';
+    return { name, snaps: rows.length, share: multiPlays.length ? rows.length / multiPlays.length : 0, bias, flagged: runPct >= 0.6 || passPct >= 0.6, topCall: topValue(rows.map(play => conceptKey(play))) };
+  }), [multiPlays]);
+  const motionTells = useMemo(() => {
+    const hasMotion = (play: Play) => { const motion = scoutText(play.motion); return isMeaningful(motion) && motion !== 'NONE'; };
+    const withMotion = multiPlays.filter(hasMotion);
+    const staticPlays = multiPlays.filter(play => !hasMotion(play));
+    const share = (rows: Play[], predicate: (play: Play) => boolean) => rows.length ? roundPct(rows.filter(predicate).length / rows.length) : 0;
+    const motionRunPct = withMotion.length ? withMotion.filter(scoutIsRun).length / withMotion.length : 0;
+    const motionPassPct = withMotion.length ? withMotion.filter(scoutIsPass).length / withMotion.length : 0;
+    let alert = '';
+    if (withMotion.length >= 3 && motionRunPct >= 0.7) alert = 'MOTION = HEAVY RUN ALERT';
+    else if (withMotion.length >= 3 && motionPassPct >= 0.7) alert = 'MOTION = HEAVY PASS ALERT';
+    return {
+      usage: multiPlays.length ? withMotion.length / multiPlays.length : 0,
+      withCount: withMotion.length, total: multiPlays.length,
+      motionRun: share(withMotion, scoutIsRun), motionPass: share(withMotion, scoutIsPass),
+      staticRun: share(staticPlays, scoutIsRun), staticPass: share(staticPlays, scoutIsPass),
+      alert,
+    };
+  }, [multiPlays]);
+  // Strength tags live in play direction in the workbook, but in the backfield column on our charts.
+  const strengthTagged = (play: Play, token: string) => scoutText(play.dir).includes(token) || scoutText(play.backfield).includes(token);
+  const strPlays = multiPlays.filter(play => strengthTagged(play, 'STR')).length;
+  const wkPlays = multiPlays.filter(play => strengthTagged(play, 'WK')).length;
+
+  // FORMATION PLAY BY PLAY · every snap from one formation.
+  const [pbpFormation, setPbpFormation] = useState(SCOUT_ALL);
+  const pbpPlays = useMemo(
+    () => matchesAll(pbpFormation) ? source : source.filter(play => scoutText(play.form) === scoutText(pbpFormation)),
+    [source, pbpFormation],
+  );
+  const pbpSituation = (play: Play) => {
+    const down = num(play.dn); const dist = num(play.dist);
+    if (down === 1) return '1ST & 10';
+    if (down === 2 || down === 3) {
+      const prefix = down === 2 ? '2ND' : '3RD';
+      return dist <= 3 ? `${prefix} & SHORT (1-3)` : dist <= 7 ? `${prefix} & MEDIUM (4-7)` : `${prefix} & LONG (8+)`;
+    }
+    return down === 4 ? '4TH DOWN' : 'OTHER';
+  };
+
+  const metricCards: { label: string; filtered: string; all: string; green: boolean }[] = [
+    { label: 'Total plays', filtered: String(filteredMetrics.count), all: String(allMetrics.count), green: false },
+    { label: 'Run %', filtered: pctText(filteredMetrics.runPct), all: pctText(allMetrics.runPct), green: filteredMetrics.runPct >= 0.6 },
+    { label: 'Pass %', filtered: pctText(filteredMetrics.passPct), all: pctText(allMetrics.passPct), green: false },
+    { label: 'Avg gain', filtered: decText(filteredMetrics.avgGain), all: decText(allMetrics.avgGain), green: false },
+    { label: 'Success rate', filtered: pctText(filteredMetrics.successRate), all: pctText(allMetrics.successRate), green: filteredMetrics.successRate >= 0.5 },
+    { label: 'Explosive rate', filtered: pctText(filteredMetrics.explosiveRate), all: pctText(allMetrics.explosiveRate), green: false },
+  ];
+
+  if (!source.length) {
+    return <div className="content">
+      <PageHead eyebrow="Scouting · tendency board" title="Find the tell." description="Turn every snap into a decision. Filter the noise, then take the strongest pattern into the room." actions={<Link href="/upload" className="btn btn-primary" data-testid="link-scout-upload"><UploadCloud /> Import chart</Link>} />
+      <Panel><div className="empty"><Film size={30} /><h3>No scouting snaps on this board</h3><p>Import a CSV in the data room or load the demo chart to build the tendency report.</p><Link href="/upload" className="btn btn-primary" data-testid="link-scout-empty-upload">Go to data room</Link></div></Panel>
+    </div>;
+  }
+
+  return <div className="content">
+    <PageHead
+      eyebrow="Scouting · tendency board"
+      title="Find the tell."
+      description="Every report from the Kangaroos scouting workbook, driven live off the current chart. Success is 4+ yards on 1st, half the sticks on 2nd, and a conversion on 3rd or 4th."
+      actions={<Link href="/reports" className="btn btn-primary" data-testid="link-scout-reports"><ClipboardList /> Build report</Link>}
+    />
+
+    <div className="filters report-tabs">
+      {SCOUT_VIEWS.map(item => {
+        const Icon = item.icon;
+        return <button key={item.key} className={`btn ${view === item.key ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView(item.key)} data-testid={`button-scout-view-${item.key}`}><Icon /> {item.label}</button>;
+      })}
+      <span className="eyebrow" style={{ marginLeft: 'auto' }}>{source.length} charted snaps</span>
+    </div>
+
+    {view === 'dashboard' && <div className="grid">
+      <Panel>
+        <SectionTitle title="Dashboard filters" detail="Every yellow filter cell from the workbook" link={<button className="btn btn-ghost" onClick={resetFilters} data-testid="button-scout-reset-filters"><RefreshCw /> Reset</button>} />
+        <div className="form-grid">
+          <div className="field">
+            <label htmlFor="scout-search">Search chart</label>
+            <div style={{ position: 'relative' }}>
+              <Search size={15} style={{ position: 'absolute', left: 11, top: 11, color: '#77758a' }} />
+              <input id="scout-search" className="input" style={{ paddingLeft: 33 }} placeholder="Any field…" value={search} onChange={event => setSearch(event.target.value)} data-testid="input-scout-search" />
+            </div>
+          </div>
+          <ScoutFilter id="select-scout-odk" label="ODK" value={fOdk} options={[SCOUT_ALL, 'O', 'D', 'K']} onChange={setFOdk} />
+          <ScoutFilter id="select-scout-formation" label="Formation" value={fFormation} options={[SCOUT_ALL, ...formationList]} onChange={setFFormation} />
+          <ScoutFilter id="select-scout-personnel" label="Personnel" value={fPersonnel} options={optionsFor(source, play => play.personnel)} onChange={setFPersonnel} />
+          <ScoutFilter id="select-scout-scheme" label="Scheme" value={fScheme} options={optionsFor(source, play => play.scheme)} onChange={setFScheme} />
+          <ScoutFilter id="select-scout-down" label="Down" value={fDown} options={[SCOUT_ALL, '1', '2', '3', '4']} onChange={setFDown} />
+          <ScoutFilter id="select-scout-type" label="Play type" value={fPlayType} options={[SCOUT_ALL, 'RUN', 'PASS']} onChange={setFPlayType} />
+          <ScoutFilter id="select-scout-backfield" label="Backfield" value={fBackfield} options={optionsFor(source, play => play.backfield)} onChange={setFBackfield} />
+          <ScoutFilter id="select-scout-offplay" label="Off play" value={fOffPlay} options={optionsFor(source, play => play.offPlay)} onChange={setFOffPlay} />
+          <ScoutFilter id="select-scout-distance" label="Distance" value={fDistance} options={[SCOUT_ALL, ...DISTANCE_BUCKETS]} onChange={setFDistance} />
+          <ScoutFilter id="select-scout-motion" label="Motion" value={fMotion} options={optionsFor(source, play => play.motion)} onChange={setFMotion} />
+          <ScoutFilter id="select-scout-dir" label="Play direction" value={fPlayDir} options={optionsFor(source, play => play.dir)} onChange={setFPlayDir} />
+          <ScoutFilter id="select-scout-hash" label="Hash" value={fHash} options={optionsFor(source, play => play.hash)} onChange={setFHash} />
+        </div>
+      </Panel>
+
+      <div className="grid kpi-grid" style={{ gridTemplateColumns: 'repeat(6, minmax(0, 1fr))', marginBottom: 0 }}>
+        {metricCards.map(card => <Kpi key={card.label} label={card.label} value={card.filtered} note={`All plays · ${card.all}`} green={card.green} />)}
+      </div>
+
+      <div className="grid split-grid">
+        <Panel pad={false}>
+          <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Formation tendencies" detail={`Top ${dashboardFormations.length} formations in the filtered set`} /></div>
+          {dashboardFormations.length ? <div className="table-wrap"><table className="data-table" data-testid="table-scout-formation-tendencies">
+            <thead><tr><th>Formation</th><th>Snaps</th><th>Run %</th><th>Pass %</th><th>Avg yds</th><th>Success %</th></tr></thead>
+            <tbody>{dashboardFormations.map(row => <tr key={row.name}>
+              <td><strong>{row.name}</strong></td>
+              <td>{row.summary.count}</td>
+              <td style={row.summary.runPct >= 0.7 ? RUN_CELL : undefined}>{pctText(row.summary.runPct)}</td>
+              <td style={row.summary.passPct >= 0.7 ? PASS_CELL : undefined}>{pctText(row.summary.passPct)}</td>
+              <td>{decText(row.summary.avgGain)}</td>
+              <td>{pctText(row.summary.successRate)}</td>
+            </tr>)}</tbody>
+          </table></div> : <div className="empty"><Layers size={28} /><h3>No formations match</h3><p>Loosen a filter to bring snaps back into the report.</p></div>}
+        </Panel>
+        <Panel pad={false}>
+          <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Play concept breakdown" detail="Play call, or scheme when the call is blank" /></div>
+          {dashboardConcepts.length ? <div className="table-wrap"><table className="data-table" data-testid="table-scout-concepts">
+            <thead><tr><th>Concept</th><th>Type</th><th>Count</th><th>% of total</th><th>Avg yds</th><th>Eff %</th><th>Expl %</th></tr></thead>
+            <tbody>{dashboardConcepts.map(row => <tr key={row.name}>
+              <td><strong>{row.name}</strong></td>
+              <td><span className={`tag ${row.type === 'RUN' ? 'green' : ''}`}>{row.type}</span></td>
+              <td>{row.count}</td>
+              <td>{pctText(row.pctTotal)}</td>
+              <td>{decText(row.avgGain)}</td>
+              <td>{pctText(row.successRate)}</td>
+              <td>{pctText(row.explosiveRate)}</td>
+            </tr>)}</tbody>
+          </table></div> : <div className="empty"><Target size={28} /><h3>No concepts match</h3><p>Play call and scheme are both blank for these snaps.</p></div>}
+        </Panel>
+      </div>
+
+      <Panel pad={false} className="fade-in">
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Play call ledger" detail={`${filtered.length} of ${source.length} snaps in view`} /></div>
+        {filtered.length ? <div className="table-wrap"><table className="data-table">
+          <thead><tr><th>Play</th><th>Situation</th><th>Type / call</th><th>Formation</th><th>Direction</th><th>Gain / loss</th><th>Defense</th></tr></thead>
+          <tbody>{filtered.map((play, index) => <tr key={`${play.playNo}-${index}`} data-testid={`row-scout-${index}`}>
+            <td><strong>#{play.playNo}</strong></td>
+            <td>{play.dn}&amp;{play.dist} · {play.hash}</td>
+            <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span> <span style={{ marginLeft: 7 }}>{play.offPlay}</span></td>
+            <td>{play.form}</td>
+            <td>{play.dir}</td>
+            <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td>{play.defense} · {play.scheme}</td>
+          </tr>)}</tbody>
+        </table></div> : <div className="empty"><Search size={28} /><h3>Nothing matches that filter</h3><p>Clear a dropdown or reset the filter block.</p></div>}
+      </Panel>
+    </div>}
+
+    {view === 'formations' && <Panel pad={false}>
+      <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Formation report" detail="Every formation across the full chart — dashboard filters do not apply here" /></div>
+      <SummaryTable label="FORMATION" rows={formationReport} testId="table-scout-formation-report" />
+    </Panel>}
+
+    {view === 'detail' && <div className="grid">
+      <Panel>
+        <SectionTitle title="Formation detail" detail="Drill one formation, then slice it by field zone" />
+        <div className="form-grid">
+          <ScoutFilter id="select-scout-detail-formation" label="Select formation" value={detailFormation} options={[SCOUT_ALL, ...formationList]} onChange={setDetailFormation} />
+          <ScoutFilter id="select-scout-detail-zone" label="Field zone filter" value={detailZone} options={[SCOUT_ALL, ...FIELD_ZONES]} onChange={setDetailZone} />
+        </div>
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Formation profile" detail={`${detailProfile.count} snaps · ${pctText(detailProfile.pctTotal)} of the chart`} /></div>
+        <SummaryTable label="FORMATION" rows={[{ name: matchesAll(detailFormation) ? 'ALL FORMATIONS' : detailFormation, summary: detailProfile }]} testId="table-scout-detail-profile" />
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Down & distance breakdown" detail="Percentages are of the snaps currently in view" /></div>
+        <SummaryTable label="SITUATION" rows={detailSituations} testId="table-scout-detail-situations" />
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Field position / yard line breakdown" detail="Always spans the whole field, so the zone filter above never hides a bucket" /></div>
+        <SummaryTable label="FIELD ZONE" rows={detailZones} testId="table-scout-detail-zones" />
+      </Panel>
+    </div>}
+
+    {view === 'multi' && <div className="grid">
+      <ScoutVerdict verdict={multiVerdict.text} tone={multiVerdict.tone} />
+      <div className="grid split-grid">
+        <Panel>
+          <SectionTitle title="Select formations to combine" detail={`${selectedForms.length} of ${rankedFormations.length} selected`} link={<button className="btn btn-ghost" onClick={() => setExcludedForms(allFormsSelected ? new Set(rankedFormations) : new Set())} data-testid="button-scout-multi-toggle-all">{allFormsSelected ? 'Deselect all' : 'Select all'}</button>} />
+          <div className="feed">
+            {rankedFormations.map(form => <label key={form} className="feed-row" style={{ cursor: 'pointer', gridTemplateColumns: '20px 1fr auto' }}>
+              <input type="checkbox" checked={!excludedForms.has(form)} onChange={() => toggleForm(form)} data-testid={`checkbox-scout-form-${form}`} />
+              <div className="feed-main"><strong>{form}</strong></div>
+              <span className="eyebrow">{formationCounts.get(form) ?? 0} snaps</span>
+            </label>)}
+          </div>
+        </Panel>
+        <Panel>
+          <SectionTitle title="Combined filters" detail="Narrow the combined set before reading the tells" />
+          <div className="form-grid" style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+            <ScoutFilter id="select-scout-multi-backfield" label="Backfield" value={multiBackfield} options={optionsFor(source, play => play.backfield)} onChange={setMultiBackfield} />
+            <ScoutFilter id="select-scout-multi-motion" label="Motion" value={multiMotion} options={optionsFor(source, play => play.motion)} onChange={setMultiMotion} />
+            <ScoutFilter id="select-scout-multi-type" label="Play type" value={multiPlayType} options={[SCOUT_ALL, 'RUN', 'PASS']} onChange={setMultiPlayType} />
+          </div>
+          <div className="trend-row" style={{ marginTop: 18, marginBottom: 0 }}>
+            <div className="trend-head"><span>Run calls <small>({multiPlays.filter(scoutIsRun).length})</small></span><span>{roundPct(multiSummary.runPct)}%</span></div>
+            <div className="progress green"><span style={{ width: `${roundPct(multiSummary.runPct)}%` }} /></div>
+            <div className="trend-head" style={{ marginTop: 14 }}><span>Pass calls <small>({multiPlays.filter(scoutIsPass).length})</small></span><span>{roundPct(multiSummary.passPct)}%</span></div>
+            <div className="progress"><span style={{ width: `${roundPct(multiSummary.passPct)}%` }} /></div>
+          </div>
+        </Panel>
+      </div>
+      <Panel>
+        <SectionTitle title="Backfield & motion tells" detail="Pre-snap indicators inside the combined set" />
+        <div className="feed">
+          {backfieldTells.length ? backfieldTells.map(tell => <div className="feed-row" key={tell.name}>
+            <span className="feed-num">{tell.flagged ? <AlertTriangle size={14} /> : <Activity size={14} />}</span>
+            <div className="feed-main"><strong>{tell.name} · {tell.bias}</strong><span>{tell.snaps} snaps ({roundPct(tell.share)}% of the set) · #1 call: {tell.topCall}</span></div>
+          </div>) : <div className="feed-row"><span className="feed-num">—</span><div className="feed-main"><strong>Backfield tells: no data for current selections</strong></div></div>}
+          <div className="feed-row">
+            <span className="feed-num">{motionTells.alert ? <AlertTriangle size={14} /> : <Percent size={14} />}</span>
+            <div className="feed-main">
+              <strong>Motion used on {roundPct(motionTells.usage)}% of snaps ({motionTells.withCount}/{motionTells.total}){motionTells.alert ? ` · ${motionTells.alert}` : ''}</strong>
+              <span>With motion = {motionTells.motionRun}% run / {motionTells.motionPass}% pass · Static = {motionTells.staticRun}% run / {motionTells.staticPass}% pass</span>
+            </div>
+          </div>
+        </div>
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title={`Combined profile (${selectedForms.length} formations selected)`} detail="Aggregate identity of everything you checked" /></div>
+        <div className="table-wrap"><table className="data-table" style={{ minWidth: 1040 }} data-testid="table-scout-multi-profile">
+          <thead><tr><th>Selected formations</th><th>Snaps</th><th>% off</th><th>Run %</th><th>Pass %</th><th>Top 3 backfields</th><th>Str / wk</th><th>Top 3 schemes</th><th>Top 3 runs</th><th>Top 3 passes</th><th>Avg yds</th></tr></thead>
+          <tbody><tr>
+            <td><strong>{selectedForms.slice(0, 3).join(', ') || '—'}{selectedForms.length > 3 ? '…' : ''}</strong></td>
+            <td>{multiSummary.count}</td>
+            <td>{pctText(multiSummary.pctTotal)}</td>
+            <td style={multiSummary.count && multiSummary.runPct >= 0.7 ? RUN_CELL : undefined}>{pctText(multiSummary.runPct)}</td>
+            <td style={multiSummary.count && multiSummary.passPct >= 0.7 ? PASS_CELL : undefined}>{pctText(multiSummary.passPct)}</td>
+            <td>{topValues(multiPlays.map(play => play.backfield), 3)}</td>
+            <td>{strPlays} STR / {wkPlays} WK</td>
+            <td>{topValues(multiPlays.map(play => play.scheme), 3)}</td>
+            <td>{topValues(multiPlays.filter(scoutIsRun).map(play => play.offPlay), 3)}</td>
+            <td>{topValues(multiPlays.filter(scoutIsPass).map(play => play.offPlay), 3)}</td>
+            <td>{decText(multiSummary.avgGain)}</td>
+          </tr></tbody>
+        </table></div>
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Combined down & distance tendencies" detail="Percentages are of the combined set" /></div>
+        <SummaryTable label="SITUATION" rows={multiSituations} testId="table-scout-multi-situations" />
+      </Panel>
+    </div>}
+
+    {view === 'pbp' && <div className="grid">
+      <Panel>
+        <SectionTitle title="Formation play by play" detail="Every snap from one formation, in order" />
+        <div className="form-grid">
+          <ScoutFilter id="select-scout-pbp-formation" label="Formation" value={pbpFormation} options={[SCOUT_ALL, ...formationList]} onChange={setPbpFormation} />
+        </div>
+      </Panel>
+      <Panel pad={false}>
+        <div style={{ padding: '21px 21px 0' }}><SectionTitle title={`Play-by-play log — ${matchesAll(pbpFormation) ? 'ALL FORMATIONS' : pbpFormation.toUpperCase()}`} detail={`${pbpPlays.length} total plays`} /></div>
+        {pbpPlays.length ? <div className="table-wrap"><table className="data-table" style={{ minWidth: 1040 }} data-testid="table-scout-pbp">
+          <thead><tr><th>Play #</th><th>Down & dist</th><th>Situation</th><th>Play call</th><th>Type</th><th>Dir</th><th>Gain</th><th>Scheme</th><th>Backfield</th><th>Motion</th><th>Hash</th></tr></thead>
+          <tbody>{pbpPlays.map((play, index) => <tr key={`${play.playNo}-${index}`}>
+            <td><strong>#{play.playNo}</strong></td>
+            <td>{num(play.dn) > 0 ? `${play.dn} & ${play.dist}` : '—'}</td>
+            <td>{pbpSituation(play)}</td>
+            <td><strong>{play.offPlay}</strong></td>
+            <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span></td>
+            <td>{play.dir}</td>
+            <td style={scoutIsExplosive(play) ? { color: '#e8c886', fontWeight: 700 } : { color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td>{play.scheme}</td>
+            <td>{play.backfield}</td>
+            <td>{play.motion}</td>
+            <td>{play.hash}</td>
+          </tr>)}</tbody>
+        </table></div> : <div className="empty"><Film size={28} /><h3>No plays found for this formation</h3><p>Pick another formation to load its log.</p></div>}
+      </Panel>
+    </div>}
   </div>;
 }
 
