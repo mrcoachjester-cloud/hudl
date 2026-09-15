@@ -4,7 +4,7 @@ const path = new URL('../src/App.tsx', import.meta.url);
 let source = fs.readFileSync(path, 'utf8');
 
 const oldImport = "import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';";
-const newImport = "import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';\nimport { parseHudlCsv } from './lib/hudlCsv';";
+const newImport = "import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';\nimport { getScoutingPlaysForTeam } from './lib/teamData';\nimport { parseHudlCsv } from './lib/hudlCsv';";
 if (source.includes(oldImport)) source = source.replace(oldImport, newImport);
 source = source.replace('const parsed = parseCsv(String(reader.result ?? \'\'));', 'const parsed = parseHudlCsv(String(reader.result ?? \'\'));');
 
@@ -73,11 +73,6 @@ const replacement = String.raw`function UploadPage({ data, setData }: { data: Da
 
   const teamGame = useMemo(() => data.schedule.find(game => game.opponent.trim().toLowerCase() === team.trim().toLowerCase()), [data.schedule, team]);
   const seasonYear = teamGame?.season || data.schedule[0]?.season || '';
-
-  useEffect(() => {
-    if (!team) return;
-    setTeam(current => current || team);
-  }, [team]);
 
   useEffect(() => {
     let cancelled = false;
