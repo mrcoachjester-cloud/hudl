@@ -1,3 +1,4 @@
+import fs from 'fs';
 import path from 'path';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -22,10 +23,22 @@ export default defineConfig(async ({ command }) => {
   }
 
   const basePath = process.env.BASE_PATH || '/';
+  const scoutHelperPath = path.resolve(import.meta.dirname, 'src', 'scout-restore-inject.tsx');
+  const scoutHelpers = fs.readFileSync(scoutHelperPath, 'utf8');
 
   return {
     base: basePath,
     plugins: [
+      {
+        name: 'restore-scout-helpers',
+        enforce: 'pre' as const,
+        transform(code: string, id: string) {
+          if (!id.endsWith('/src/App.tsx') || code.includes('function optionsFor(')) return null;
+          const marker = 'function ScoutPage(';
+          if (!code.includes(marker)) return null;
+          return { code: code.replace(marker, `${scoutHelpers}\n\n${marker}`), map: null };
+        },
+      },
       react(),
       tailwindcss(),
       runtimeErrorOverlay(),
