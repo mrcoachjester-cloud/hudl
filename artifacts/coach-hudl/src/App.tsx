@@ -1,5 +1,6 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
 import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
 import {
@@ -364,26 +365,6 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
                 {seasons.map(season => (
                   <option key={season} value={season}>
                     {season}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <label htmlFor="global-game" className="eyebrow" style={{ margin: 0 }}>
-                Game
-              </label>
-              <select
-                id="global-game"
-                value={activeGame?.id ?? ''}
-                onChange={event => selectGame(event.target.value)}
-                style={{ minWidth: 190 }}
-                data-testid="select-global-game"
-              >
-                {seasonGames.map(game => (
-                  <option key={game.id} value={game.id}>
-                    {game.opponent}
-                    {game.archived ? ' · Archived' : ''}
                   </option>
                 ))}
               </select>
@@ -937,176 +918,114 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
 }
 
 function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
-  const [target, setTarget] = useState<'scouting' | 'live'>('scouting'); const [preview, setPreview] = useState<Play[]>(data.scouting); const [loading, setLoading] = useState(false); const fileRef = useRef<HTMLInputElement>(null); const toast = useToast();
-  const handleFile = (file?: File) => { if (!file) return; setLoading(true); const reader = new FileReader(); reader.onload = () => { const parsed = parseCsv(String(reader.result ?? '')); setPreview(parsed.slice(0, 12)); if (parsed.length) { const next = { ...data, [target]: parsed }; setData(next); toast.notify(`${parsed.length} plays normalized into ${target} board`); } else toast.notify('No readable play rows found in that file'); setLoading(false); }; reader.onerror = () => { setLoading(false); toast.notify('Could not read that file'); }; reader.readAsText(file); };
-  const loadDemo = () => { const next = { ...data, scouting: demoScouting }; setData(next); setPreview(demoScouting.slice(0, 12)); toast.notify('Demo scout loaded · 15 plays ready to study'); };
-  const clear = (which: 'scouting' | 'live') => { const next = { ...data, [which]: [] }; setData(next); if (target === which) setPreview([]); toast.notify(`${which === 'scouting' ? 'Scouting' : 'Live'} board cleared`); };
-  return <div className="content"><PageHead eyebrow="Data room · ingest & normalize" title="Bring in the tape." description="Start with a Sheets export or a live chart. Coach Connect maps common headers and keeps your board local to this device." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Import CSV</button>} />
+  const scheduleTeams = useMemo(() => Array.from(new Set(data.schedule.map(game => game.opponent.trim()).filter(Boolean))).sort(), [data.schedule]);
+  const [team, setTeam] = useState(data.activeTeam || scheduleTeams[0] || '');
+  const [scouts, setScouts] = useState<Array<{ id: string; description: string | null; created_at: string }>>([]);
+  const [scoutId, setScoutId] = useState('new');
+  const [newScoutName, setNewScoutName] = useState('Scout File');
+  const [preview, setPreview] = useState<Play[]>([]);
+  const [loading, setLoading] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
+
+  const teamGame = useMemo(() => data.schedule.find(game => game.opponent.trim().toLowerCase() === team.trim().toLowerCase()), [data.schedule, team]);
+  const seasonYear = teamGame?.season || data.schedule[0]?.season || '';
+
+  useEffect(() => {
+    if (!team) return;
+    setTeam(current => current || team);
+  }, [team]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadScouts() {
+      if (!team || !seasonYear) { setScouts([]); return; }
+      try {
+        const seasons = await getSeasons();
+        const season = seasons.find(item => String(item.season_year) === String(seasonYear));
+        if (!season) { setScouts([]); return; }
+        const sessions = await getScoutingSessions(season.id);
+        const filtered = sessions.filter(session => session.opponent.trim().toLowerCase() === team.trim().toLowerCase());
+        if (!cancelled) {
+          setScouts(filtered.map(session => ({ id: session.id, description: session.description, created_at: session.created_at })));
+          setScoutId(current => filtered.some(session => session.id === current) ? current : (filtered[0]?.id ?? 'new'));
+        }
+      } catch (error) {
+        console.error('Could not load scout files:', error);
+        if (!cancelled) setScouts([]);
+      }
+    }
+    void loadScouts();
+    return () => { cancelled = true; };
+  }, [team, seasonYear]);
+
+  const selectTeam = (value: string) => {
+    setTeam(value);
+    setScoutId('new');
+    setPreview([]);
+    if (value) {
+      const game = data.schedule.find(item => item.opponent.trim().toLowerCase() === value.trim().toLowerCase());
+      setData({ ...data, activeTeam: value, ...(game ? { activeGameId: game.id, live: data.gameData?.[game.id]?.live ?? [] } : {}) });
+    }
+  };
+
+  const handleFile = (file?: File) => {
+    if (!file) return;
+    if (!team) { toast.notify('Select a Team before uploading.'); return; }
+    setLoading(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const parsed = parseHudlCsv(String(reader.result ?? ''));
+        setPreview(parsed.slice(0, 12));
+        if (!parsed.length) { toast.notify('No readable play rows found in that file'); return; }
+        const seasons = await getSeasons();
+        const season = seasons.find(item => String(item.season_year) === String(seasonYear));
+        if (!season) throw new Error('The selected team does not have a matching Supabase season.');
+        let targetScoutId = scoutId;
+        if (targetScoutId === 'new') {
+          const session = await createScoutingSession({ seasonId: season.id, team, description: newScoutName.trim() || file.name.replace(/\.csv$/i, '') || 'Scout File' });
+          if (!session) throw new Error('Supabase is not configured.');
+          targetScoutId = session.id;
+        }
+        await appendScoutingPlays(targetScoutId, parsed);
+        const scouting = await getScoutingPlaysForTeam(seasonYear, team);
+        setData({ ...data, activeTeam: team, scouting });
+        toast.notify(parsed.length + ' plays saved under ' + team + ' · ' + (scouts.find(s => s.id === targetScoutId)?.description ?? newScoutName));
+        if (targetScoutId !== scoutId) setScoutId(targetScoutId);
+        const sessions = await getScoutingSessions(season.id);
+        setScouts(sessions.filter(session => session.opponent.trim().toLowerCase() === team.trim().toLowerCase()).map(session => ({ id: session.id, description: session.description, created_at: session.created_at })));
+      } catch (error) {
+        console.error('Scout upload failed:', error);
+        toast.notify(error instanceof Error ? error.message : 'Scout upload failed');
+      } finally {
+        setLoading(false);
+      }
+    };
+    reader.onerror = () => { setLoading(false); toast.notify('Could not read that file'); };
+    reader.readAsText(file);
+  };
+
+  const selectedScout = scouts.find(scout => scout.id === scoutId);
+  return <div className="content">
+    <PageHead eyebrow="Data room · scouting files" title="Organize the opponent." description="Choose a team from your Schedule, choose its Scout File, then upload the scouting data into that file. Live Game data stays separate." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Upload Data</button>} />
     <input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => handleFile(event.target.files?.[0])} data-testid="input-csv-file" />
-    <div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .42fr)' }}>
-      <div className="grid"><Panel><div className="filters"><button className={`btn ${target === 'scouting' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => { setTarget('scouting'); setPreview(data.scouting.slice(0, 12)); }} data-testid="button-target-scouting"><Shield /> Scouting board</button><button className={`btn ${target === 'live' ? 'btn-green' : 'btn-ghost'}`} onClick={() => { setTarget('live'); setPreview(data.live.slice(0, 12)); }} data-testid="button-target-live"><Zap /> Live board</button><span className="eyebrow" style={{ marginLeft: 'auto' }}>{target === 'scouting' ? data.scouting.length : data.live.length} plays saved</span></div><div className="upload-zone" onClick={() => fileRef.current?.click()} role="button" tabIndex={0} onKeyDown={event => event.key === 'Enter' && fileRef.current?.click()} data-testid="dropzone-csv"><div className="upload-icon">{loading ? <RefreshCw className="animate-spin" /> : <UploadCloud />}</div><h3>{loading ? 'Normalizing your rows…' : 'Drop a CSV here'}</h3><p>Exports from Google Sheets, Hudl, or your charting workflow. Headers are matched automatically.</p><button className="btn btn-primary" onClick={event => { event.stopPropagation(); fileRef.current?.click(); }} data-testid="button-choose-csv">Choose file</button></div></Panel>
-        <Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Normalized preview" detail={preview.length ? `Showing ${preview.length} of ${target === 'scouting' ? data.scouting.length : data.live.length} rows` : 'Your parsed rows will appear here'} /></div>{preview.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Down</th><th>Type</th><th>Play call</th><th>Formation</th><th>Gain / loss</th><th>Result</th></tr></thead><tbody>{preview.map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-preview-${i}`}><td><strong>#{play.playNo}</strong></td><td>{play.dn}&amp;{play.dist}</td><td><span className={`tag ${play.type.toLowerCase().includes('run') ? 'green' : ''}`}>{play.type}</span></td><td>{play.offPlay}</td><td>{play.form}</td><td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td><td>{play.result}</td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No rows in this board yet</h3><p>Import a CSV or load the demo board to get moving.</p><button className="btn btn-primary" onClick={loadDemo} data-testid="button-empty-load-demo">Load demo data</button></div>}</Panel></div>
-      <div className="grid"><Panel><SectionTitle title="Quick start" detail="A clean chart in three moves" /><div className="feed"><div className="feed-row"><span className="feed-num">01</span><div className="feed-main"><strong>Export your sheet as CSV</strong><span>One row per snap works best.</span></div></div><div className="feed-row"><span className="feed-num">02</span><div className="feed-main"><strong>Choose your board</strong><span>Keep scouting and live data separate.</span></div></div><div className="feed-row"><span className="feed-num">03</span><div className="feed-main"><strong>Study the signal</strong><span>Tendencies update immediately.</span></div></div></div></Panel><Panel><SectionTitle title="Demo board" detail="A realistic North Ridge scout" /><p style={{ fontSize: 12, lineHeight: 1.6, color: 'hsl(var(--muted-foreground))', marginTop: 0 }}>Use the bundled chart to explore the workspace before your next upload. It stays on this device until you clear it.</p><div className="actions"><button className="btn btn-primary" onClick={loadDemo} data-testid="button-load-demo"><Sparkles /> Load demo</button><button className="btn btn-danger" onClick={() => clear('scouting')} data-testid="button-clear-scouting"><Trash2 /> Clear scout</button></div></Panel><Panel><SectionTitle title="Clear live board" detail={data.live.length ? `${data.live.length} live snaps stored` : 'No live snaps stored'} />{data.live.length ? <button className="btn btn-danger" onClick={() => clear('live')} data-testid="button-clear-live"><Trash2 /> Clear live data</button> : <div className="eyebrow">Ready for game day</div>}</Panel></div>
-    </div>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
+    <Panel>
+      <SectionTitle title="Scout data" detail="Team → Scout File → Upload" />
+      <div className="filters" style={{ alignItems: 'end' }}>
+        <div><label className="eyebrow">Team</label><select value={team} onChange={event => selectTeam(event.target.value)} data-testid="select-data-room-team"><option value="">Select Team</option>{scheduleTeams.map(name => <option key={name} value={name}>{name}</option>)}</select></div>
+        <div><label className="eyebrow">Scout</label><select value={scoutId} onChange={event => setScoutId(event.target.value)} disabled={!team} data-testid="select-data-room-scout"><option value="new">+ New Scout File</option>{scouts.map(scout => <option key={scout.id} value={scout.id}>{scout.description || 'Scout File'}</option>)}</select></div>
+        {scoutId === 'new' && <div><label className="eyebrow">Scout File Name</label><input className="input" value={newScoutName} onChange={event => setNewScoutName(event.target.value)} placeholder="Scout File 1" /></div>}
+        <button className="btn btn-primary" disabled={!team || loading} onClick={() => fileRef.current?.click()} data-testid="button-data-room-upload"><UploadCloud /> {loading ? 'Saving…' : 'Upload Data'}</button>
+      </div>
+      <div className="callout" style={{ marginTop: 16 }}><Shield /><span><strong>{team || 'No team selected'}</strong>{selectedScout ? ' · ' + (selectedScout.description || 'Scout File') : team ? ' · New Scout File' : ''} — scouting data is stored independently from Live Game charting.</span></div>
+    </Panel>
+    <Panel pad={false}>
+      <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Normalized preview" detail={preview.length ? 'Showing ' + preview.length + ' imported rows' : 'Your uploaded rows will appear here'} /></div>
+      {preview.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Down</th><th>Type</th><th>Play call</th><th>Formation</th><th>Gain / loss</th><th>Result</th></tr></thead><tbody>{preview.map((play, i) => <tr key={play.playNo + '-' + i}><td><strong>#{play.playNo}</strong></td><td>{play.dn}&amp;{play.dist}</td><td>{play.type}</td><td>{play.offPlay}</td><td>{play.form}</td><td>{play.gnls}</td><td>{play.result}</td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>Select a Team and Scout File</h3><p>Example: Data Room → Paschal → Scout File 1 → Upload Data.</p></div>}
+    </Panel>
+    {toast.message && <Toast message={toast.message} onClose={toast.clear} />}
   </div>;
-}
-
-// ---------------------------------------------------------------------------
-// Scouting report engine — ported from the Kangaroos Apps Script workbook.
-// Mirrors DASHBOARD, FORMATION REPORT, FORMATION DETAIL, MULTI FORMATION REPORT
-// and FORMATION PLAY BY PLAY, including their metric definitions.
-// ---------------------------------------------------------------------------
-type ScoutView = 'dashboard' | 'formations' | 'detail' | 'multi' | 'pbp';
-type ScoutSummary = {
-  count: number; pctTotal: number; runPct: number; passPct: number; avgGain: number; successRate: number;
-  explosiveRate: number; topScheme: string; topRun: string; topPass: string; topBackfield: string;
-};
-type ConceptRow = { name: string; type: 'RUN' | 'PASS'; count: number; pctTotal: number; avgGain: number; successRate: number; explosiveRate: number };
-
-const SCOUT_ALL = 'ALL';
-const UNCLASSIFIED_ZONE = 'UNCLASSIFIED';
-const FIELD_ZONES = ['BACKED UP (Own 1-10)', 'OWN TERRITORY (Own 11-39)', 'MIDFIELD (Own 40 - Opp 40)', 'RED ZONE (Opp 11-39)', 'GOAL LINE (Opp 1-10)'];
-const DISTANCE_BUCKETS = ['1-3 (SHORT)', '4-7 (MEDIUM)', '8+ (LONG)'];
-const SUMMARY_COLUMNS = ['SNAPS', '% OF TOTAL', 'RUN %', 'PASS %', 'AVG YDS', 'SUCCESS %', 'TOP SCHEME', 'TOP RUN', 'TOP PASS', 'PRIMARY BACKFIELD'];
-const SCOUT_VIEWS: { key: ScoutView; label: string; icon: typeof LayoutDashboard }[] = [
-  { key: 'dashboard', label: 'Dashboard', icon: Gauge },
-  { key: 'formations', label: 'Formation report', icon: Layers },
-  { key: 'detail', label: 'Formation detail', icon: Compass },
-  { key: 'multi', label: 'Multi formation', icon: Split },
-  { key: 'pbp', label: 'Play by play', icon: ClipboardList },
-];
-const DOWN_DISTANCE_SITUATIONS: { label: string; match: (play: Play) => boolean }[] = [
-  { label: '1ST & 10+', match: p => num(p.dn) === 1 && num(p.dist) >= 10 },
-  { label: '1ST & SHORT (1-9)', match: p => num(p.dn) === 1 && num(p.dist) < 10 },
-  { label: '2ND & LONG (8+)', match: p => num(p.dn) === 2 && num(p.dist) >= 8 },
-  { label: '2ND & MED (4-7)', match: p => num(p.dn) === 2 && num(p.dist) >= 4 && num(p.dist) <= 7 },
-  { label: '2ND & SHORT (1-3)', match: p => num(p.dn) === 2 && num(p.dist) <= 3 },
-  { label: '3RD & LONG (7+)', match: p => num(p.dn) === 3 && num(p.dist) >= 7 },
-  { label: '3RD & MED (3-6)', match: p => num(p.dn) === 3 && num(p.dist) >= 3 && num(p.dist) <= 6 },
-  { label: '3RD & SHORT / 4TH', match: p => (num(p.dn) === 3 && num(p.dist) <= 2) || num(p.dn) === 4 },
-];
-const RUN_CELL: CSSProperties = { background: 'rgba(31,201,139,.1)', color: '#63e6b4', fontWeight: 700 };
-const PASS_CELL: CSSProperties = { background: 'rgba(164,123,255,.1)', color: '#cbb5ff', fontWeight: 700 };
-
-const scoutText = (value: string | undefined) => String(value ?? '').trim().toUpperCase();
-const scoutIsRun = (play: Play) => { const type = scoutText(play.type); return type.startsWith('RUN') || type === 'R'; };
-const scoutIsPass = (play: Play) => { const type = scoutText(play.type); return type.startsWith('PASS') || type === 'P'; };
-const scoutIsExplosive = (play: Play) => num(play.gnls) >= 12;
-function scoutIsSuccess(play: Play) {
-  const down = num(play.dn); const dist = num(play.dist); const gain = num(play.gnls);
-  if (down === 1) return gain >= 4;
-  if (down === 2) return gain >= dist / 2;
-  if (down >= 3) return gain >= dist;
-  return gain >= 4;
-}
-function distanceBucket(dist: number) {
-  if (dist >= 1 && dist <= 3) return DISTANCE_BUCKETS[0];
-  if (dist >= 4 && dist <= 7) return DISTANCE_BUCKETS[1];
-  return dist >= 8 ? DISTANCE_BUCKETS[2] : '';
-}
-// Own-side yard lines are negative, opponent-side positive (see normalizeYardLine).
-function classifyYardLine(value: string) {
-  const normalized = normalizeYardLine(value);
-  if (!/^-?\d{1,3}$/.test(normalized)) return UNCLASSIFIED_ZONE;
-  const yard = Number(normalized);
-  if (Math.abs(yard) > 100) return UNCLASSIFIED_ZONE;
-  if (yard < 0) { const own = Math.abs(yard); return own <= 10 ? FIELD_ZONES[0] : own <= 39 ? FIELD_ZONES[1] : FIELD_ZONES[2]; }
-  if (yard === 0) return FIELD_ZONES[2];
-  return yard <= 10 ? FIELD_ZONES[4] : yard <= 39 ? FIELD_ZONES[3] : FIELD_ZONES[2];
-}
-function isMeaningful(value: string) {
-  const upper = scoutText(value);
-  return Boolean(upper) && upper !== '—' && upper !== '-' && upper !== '0' && upper !== 'UNSPECIFIED' && !upper.includes('SELECT');
-}
-// Grouping is case-insensitive so sloppy entry ("DROP BACK" / "Drop Back") lands in one row.
-function countBy(values: string[]) {
-  const counts = new Map<string, number>();
-  for (const raw of values) { const value = scoutText(raw); if (!isMeaningful(value)) continue; counts.set(value, (counts.get(value) ?? 0) + 1); }
-  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
-}
-const topValue = (values: string[]) => countBy(values)[0]?.[0] ?? '—';
-const topValues = (values: string[], take: number) => countBy(values).slice(0, take).map(entry => entry[0]).join(', ') || '—';
-function summarize(plays: Play[], base: number): ScoutSummary {
-  const count = plays.length;
-  const runs = plays.filter(scoutIsRun);
-  const passes = plays.filter(scoutIsPass);
-  return {
-    count,
-    pctTotal: base ? count / base : 0,
-    runPct: count ? runs.length / count : 0,
-    passPct: count ? passes.length / count : 0,
-    avgGain: count ? plays.reduce((sum, play) => sum + num(play.gnls), 0) / count : 0,
-    successRate: count ? plays.filter(scoutIsSuccess).length / count : 0,
-    explosiveRate: count ? plays.filter(scoutIsExplosive).length / count : 0,
-    topScheme: topValue(plays.map(play => play.scheme)),
-    topRun: topValue(runs.map(play => play.offPlay)),
-    topPass: topValue(passes.map(play => play.offPlay)),
-    topBackfield: topValue(plays.map(play => play.backfield)),
-  };
-}
-function optionsFor(plays: Play[], pick: (play: Play) => string) {
-  const values = new Set<string>();
-  for (const play of plays) { const value = scoutText(pick(play)); if (isMeaningful(value)) values.add(value); }
-  return [SCOUT_ALL, ...[...values].sort((a, b) => a.localeCompare(b))];
-}
-const pctText = (value: number) => `${(value * 100).toFixed(1)}%`;
-const roundPct = (value: number) => Math.round(value * 100);
-const decText = (value: number) => value.toFixed(1);
-const matchesAll = (filter: string) => !filter || filter === SCOUT_ALL;
-const conceptKey = (play: Play) => { const call = String(play.offPlay ?? '').trim(); return isMeaningful(call) ? call : String(play.scheme ?? '').trim(); };
-
-function ScoutFilter({ id, label, value, options, onChange }: { id: string; label: string; value: string; options: string[]; onChange: (value: string) => void }) {
-  return (
-    <div className="field">
-      <label htmlFor={id}>{label}</label>
-      <select id={id} value={value} onChange={event => onChange(event.target.value)} data-testid={id}>
-        {options.map(option => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </div>
-  );
-}
-
-function SummaryTable({ label, rows, testId }: { label: string; rows: { name: string; summary: ScoutSummary }[]; testId: string }) {
-  return (
-    <div className="table-wrap">
-      <table className="data-table" style={{ minWidth: 1040 }} data-testid={testId}>
-        <thead><tr><th>{label}</th>{SUMMARY_COLUMNS.map(column => <th key={column}>{column}</th>)}</tr></thead>
-        <tbody>
-          {rows.map(row => (
-            <tr key={row.name}>
-              <td><strong>{row.name}</strong></td>
-              <td>{row.summary.count}</td>
-              <td>{pctText(row.summary.pctTotal)}</td>
-              <td style={row.summary.count && row.summary.runPct >= 0.7 ? RUN_CELL : undefined}>{pctText(row.summary.runPct)}</td>
-              <td style={row.summary.count && row.summary.passPct >= 0.7 ? PASS_CELL : undefined}>{pctText(row.summary.passPct)}</td>
-              <td>{decText(row.summary.avgGain)}</td>
-              <td>{pctText(row.summary.successRate)}</td>
-              <td>{row.summary.topScheme}</td>
-              <td>{row.summary.topRun}</td>
-              <td>{row.summary.topPass}</td>
-              <td>{row.summary.topBackfield}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-function ScoutVerdict({ verdict, tone }: { verdict: string; tone: 'run' | 'pass' | 'balanced' | 'none' }) {
-  const palette: Record<typeof tone, CSSProperties> = {
-    run: { background: 'rgba(31,201,139,.08)', borderColor: 'rgba(31,201,139,.26)', color: '#8df0c4' },
-    pass: { background: 'rgba(164,123,255,.08)', borderColor: 'rgba(164,123,255,.26)', color: '#cbb5ff' },
-    balanced: { background: 'rgba(255,255,255,.035)', borderColor: 'hsl(var(--border))', color: '#eeeaf7' },
-    none: { background: 'rgba(255,255,255,.02)', borderColor: 'hsl(var(--border))', color: 'hsl(var(--muted-foreground))' },
-  };
-  const Icon = tone === 'run' || tone === 'pass' ? AlertTriangle : Compass;
-  return (
-    <div className="callout" style={{ ...palette[tone], fontSize: 13, fontWeight: 700 }} data-testid="banner-scout-verdict">
-      <Icon style={{ color: 'inherit' }} />
-      <span>{verdict}</span>
-    </div>
-  );
 }
 
 function ScoutPage({ data }: { data: Dataset }) {
