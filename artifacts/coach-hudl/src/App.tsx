@@ -932,11 +932,6 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   const seasonYear = teamGame?.season || data.schedule[0]?.season || '';
 
   useEffect(() => {
-    if (!team) return;
-    setTeam(current => current || team);
-  }, [team]);
-
-  useEffect(() => {
     let cancelled = false;
     async function loadScouts() {
       if (!team || !seasonYear) { setScouts([]); return; }
