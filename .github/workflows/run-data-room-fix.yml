@@ -1,0 +1,28 @@
+name: Run Data Room Supabase Fix
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: "!contains(github.event.head_commit.message, 'Apply Data Room Supabase fix')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply existing Data Room fix
+        run: node artifacts/coach-hudl/scripts/fix-team-data-room.mjs
+      - name: Commit Data Room changes
+        run: |
+          if git diff --quiet; then
+            echo "No Data Room changes were needed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/coach-hudl/src/App.tsx
+          git commit -m "Apply Data Room Supabase fix"
+          git push
