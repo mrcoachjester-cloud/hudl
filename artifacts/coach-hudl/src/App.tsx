@@ -40,6 +40,8 @@ import { Link, Route, Switch, useLocation, Router as WouterRouter } from 'wouter
 
 type Play = StandardPlay;
 
+const SCOUT_ALL = 'ALL';
+
 type ScheduleGame = {
   id: string;
   season: string;
