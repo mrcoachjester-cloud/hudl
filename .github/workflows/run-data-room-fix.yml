@@ -13,12 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Restore top-level Season + Team context
-        run: node artifacts/coach-hudl/scripts/restore-top-team-selector.mjs
       - name: Define scout filter constants
         run: node artifacts/coach-hudl/scripts/fix-scout-all-constant.mjs
-      - name: Apply existing Data Room fix
-        run: node artifacts/coach-hudl/scripts/fix-team-data-room.mjs
       - name: Commit Data Room changes
         run: |
           if git diff --quiet; then
