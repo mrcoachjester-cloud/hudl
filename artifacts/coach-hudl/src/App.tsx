@@ -57,6 +57,7 @@ type Dataset = {
   live: Play[];
   schedule: ScheduleGame[];
   activeGameId: string;
+  activeTeam?: string;
   gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
 };
 
@@ -114,6 +115,7 @@ function safeLoad(): Dataset {
       live: currentPlays.live,
       schedule,
       activeGameId,
+      activeTeam: typeof parsed.activeTeam === 'string' ? parsed.activeTeam : (schedule.find(game => game.id === activeGameId)?.opponent ?? ''),
       gameData: {
         ...gameData,
         [activeGameId]: currentPlays,
@@ -228,6 +230,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   const [location] = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
+  const [teamOptions, setTeamOptions] = useState<string[]>([]);
+  const activeTeam = data.activeTeam ?? activeGame?.opponent ?? '';
 
   const seasons = Array.from(new Set(data.schedule.map(game => game.season)))
     .sort((a, b) => Number(b) - Number(a));
@@ -237,6 +241,32 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   const seasonGames = data.schedule
     .filter(game => game.season === activeSeason)
     .sort((a, b) => a.date.localeCompare(b.date));
+
+  useEffect(() => {
+    const names = Array.from(new Set(seasonGames.map(game => game.opponent.trim()).filter(Boolean))).sort();
+    setTeamOptions(names);
+  }, [activeSeason, data.schedule]);
+
+  const selectTeam = async (team: string) => {
+    const normalizedTeam = team.trim();
+    if (!normalizedTeam || normalizedTeam === activeTeam) return;
+    const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
+    try {
+      const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
+      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
+      setData({
+        ...data,
+        activeTeam: normalizedTeam,
+        activeGameId: teamGame?.id ?? data.activeGameId,
+        scouting,
+        live,
+      });
+    } catch (error) {
+      console.error('Could not load team scouting data:', error);
+      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
+      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
+    }
+  };
 
   const selectGame = async (gameId: string) => {
     if (!gameId || gameId === data.activeGameId) return;
@@ -373,11 +403,29 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
               </select>
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label htmlFor="global-team" className="eyebrow" style={{ margin: 0 }}>
+                Team
+              </label>
+              <select
+                id="global-team"
+                value={activeTeam}
+                onChange={event => void selectTeam(event.target.value)}
+                style={{ minWidth: 150 }}
+                data-testid="select-global-team"
+              >
+                {!teamOptions.includes(activeTeam) && activeTeam && <option value={activeTeam}>{activeTeam}</option>}
+                {teamOptions.map(team => (
+                  <option key={team} value={team}>{team}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="live-pill">
               <span className="live-dot" /> {isSupabaseConfigured ? 'cloud connected' : 'local workspace'}
             </div>
             <div className="avatar" aria-label="Coach profile">
-              JR
+              WHS
             </div>
           </div>
         </header>
