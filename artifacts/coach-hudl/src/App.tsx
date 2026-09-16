@@ -421,6 +421,24 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
               </select>
             </div>
 
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <label htmlFor="global-team" className="eyebrow" style={{ margin: 0 }}>
+                Team
+              </label>
+              <select
+                id="global-team"
+                value={activeTeam}
+                onChange={event => void selectTeam(event.target.value)}
+                style={{ minWidth: 150 }}
+                data-testid="select-global-team"
+              >
+                {!teamOptions.includes(activeTeam) && activeTeam && <option value={activeTeam}>{activeTeam}</option>}
+                {teamOptions.map(team => (
+                  <option key={team} value={team}>{team}</option>
+                ))}
+              </select>
+            </div>
+
             <div className="live-pill">
               <span className="live-dot" /> {isSupabaseConfigured ? 'cloud connected' : 'local workspace'}
             </div>
