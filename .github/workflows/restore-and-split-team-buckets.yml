@@ -9,7 +9,7 @@ permissions:
 
 jobs:
   restore-and-patch:
-    if: ${{ !contains(github.event.head_commit.message, 'Restore Data Room app and split scouting upload teams') }}
+    if: ${{ !contains(github.event.head_commit.message, '[auto-team-bucket]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,5 +89,5 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add artifacts/coach-hudl/src/App.tsx
           git diff --cached --quiet && exit 0
-          git commit -m "Restore Data Room app and split scouting upload teams"
+          git commit -m "[auto-team-bucket] Restore Data Room app and split scouting upload teams"
           git push
