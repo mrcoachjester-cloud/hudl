@@ -1,0 +1,96 @@
+name: Restore and fix team buckets
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  restore-and-patch:
+    if: ${{ !contains(github.event.head_commit.message, '[auto-team-bucket]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore known-good App.tsx
+        run: git checkout d37ece050fc8778606dfa5a9754cc9fc71d30836 -- artifacts/coach-hudl/src/App.tsx
+
+      - name: Apply focused team bucket and upload fixes
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'artifacts/coach-hudl/src/App.tsx';
+          let source = fs.readFileSync(path, 'utf8');
+
+          source = source.replace(
+            "import { getScoutingPlaysForTeam } from './lib/teamData';",
+            "import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';"
+          );
+
+          const start = source.indexOf('function UploadPage(');
+          const end = source.indexOf('\nfunction ScoutPage(', start);
+          if (start < 0 || end < 0) throw new Error('Could not locate UploadPage boundaries.');
+          let page = source.slice(start, end);
+
+          page = page.replace(
+            "  const scheduleTeams = useMemo(() => Array.from(new Set(data.schedule.map(game => game.opponent.trim()).filter(Boolean))).sort(), [data.schedule]);\n  const [team, setTeam] = useState(data.activeTeam || scheduleTeams[0] || '');",
+            "  const [scoutingTeams, setScoutingTeams] = useState<string[]>([]);\n  const [team, setTeam] = useState('');\n  const [newScoutingTeam, setNewScoutingTeam] = useState('');\n  const effectiveTeam = team === '__new__' ? newScoutingTeam.trim() : team;"
+          );
+          page = page.replace(
+            "  const teamGame = useMemo(() => data.schedule.find(game => game.opponent.trim().toLowerCase() === team.trim().toLowerCase()), [data.schedule, team]);\n  const seasonYear = teamGame?.season || data.schedule[0]?.season || '';",
+            "  const seasonYear = data.schedule.find(game => game.id === data.activeGameId)?.season || data.schedule[0]?.season || '';"
+          );
+
+          const effectStart = page.indexOf('  useEffect(() => {');
+          const effectEnd = page.indexOf('\n  const selectTeam =', effectStart);
+          if (effectStart < 0 || effectEnd < 0) throw new Error('Could not locate UploadPage effect.');
+          page = page.slice(0, effectStart) + `  useEffect(() => {\n    let cancelled = false;\n    async function loadScouts() {\n      if (!seasonYear) { setScoutingTeams([]); setScouts([]); return; }\n      try {\n        const names = await getScoutingTeamNames(seasonYear);\n        if (cancelled) return;\n        setScoutingTeams(names);\n        const matching = data.activeTeam && names.some(name => name.trim().toLowerCase() === data.activeTeam?.trim().toLowerCase()) ? data.activeTeam : '';\n        setTeam(current => current || matching || '');\n        const currentTeam = effectiveTeam || matching;\n        if (!currentTeam) { setScouts([]); return; }\n        const seasons = await getSeasons();\n        const season = seasons.find(item => String(item.season_year) === String(seasonYear));\n        if (!season) { setScouts([]); return; }\n        const sessions = await getScoutingSessions(season.id);\n        const filtered = sessions.filter(session => session.opponent.trim().toLowerCase() === currentTeam.trim().toLowerCase());\n        if (!cancelled) {\n          setScouts(filtered.map(session => ({ id: session.id, description: session.description, created_at: session.created_at })));\n          setScoutId(current => filtered.some(session => session.id === current) ? current : (filtered[0]?.id ?? 'new'));\n        }\n      } catch (error) {\n        console.error('Could not load scout files:', error);\n        if (!cancelled) { setScoutingTeams([]); setScouts([]); }\n      }\n    }\n    void loadScouts();\n    return () => { cancelled = true; };\n  }, [seasonYear, effectiveTeam, data.activeTeam]);\n` + page.slice(effectEnd);
+
+          const selectStart = page.indexOf('  const selectTeam =');
+          const handleStart = page.indexOf('\n  const handleFile =', selectStart);
+          if (selectStart < 0 || handleStart < 0) throw new Error('Could not locate UploadPage selector handler.');
+          page = page.slice(0, selectStart) + `  const selectTeam = (value: string) => {\n    setTeam(value);\n    setScoutId('new');\n    setPreview([]);\n    if (value !== '__new__') setNewScoutingTeam('');\n    if (value && value !== '__new__') setData({ ...data, activeTeam: value });\n  };\n` + page.slice(handleStart);
+
+          page = page.replace(/if \(!team\) \{ toast\.notify\('Select a Team before uploading'\.\); return; \}/, "if (!effectiveTeam) { toast.notify('Select or enter a Scouting Team before uploading.'); return; }");
+          page = page.replace(/createScoutingSession\(\{ seasonId: season\.id, team, description:/, "createScoutingSession({ seasonId: season.id, team: effectiveTeam, description:");
+          page = page.replace(/getScoutingPlaysForTeam\(seasonYear, team\)/g, "getScoutingPlaysForTeam(seasonYear, effectiveTeam)");
+          page = page.replace(/setData\(\{ \.\.\.data, activeTeam: team, scouting \}\)/, "setData({ ...data, activeTeam: effectiveTeam, scouting })");
+          page = page.replace(/sessions\.filter\(session => session\.opponent\.trim\(\)\.toLowerCase\(\) === team\.trim\(\)\.toLowerCase\(\)\)/g, "sessions.filter(session => session.opponent.trim().toLowerCase() === effectiveTeam.trim().toLowerCase())");
+          page = page.replace(
+            '<div><label className="eyebrow">Team</label><select value={team} onChange={event => selectTeam(event.target.value)} data-testid="select-data-room-team"><option value="">Select Team</option>{scheduleTeams.map(name => <option key={name} value={name}>{name}</option>)}</select></div>',
+            '<div><label className="eyebrow">Scouting Team</label><select value={team} onChange={event => selectTeam(event.target.value)} data-testid="select-data-room-team"><option value="">Select Scouting Team</option>{scoutingTeams.map(name => <option key={name} value={name}>{name}</option>)}<option value="__new__">+ New Scouting Team</option></select></div>'
+          );
+          page = page.replace(
+            "{scoutId === 'new' && <div><label className=\"eyebrow\">Scout File Name</label><input className=\"input\" value={newScoutName} onChange={event => setNewScoutName(event.target.value)} placeholder=\"Scout File 1\" /></div>}",
+            "{team === '__new__' && <div><label className=\"eyebrow\">New Scouting Team</label><input className=\"input\" value={newScoutingTeam} onChange={event => setNewScoutingTeam(event.target.value)} placeholder=\"Arlington Martin\" /></div>}{scoutId === 'new' && <div><label className=\"eyebrow\">Scout File Name</label><input className=\"input\" value={newScoutName} onChange={event => setNewScoutName(event.target.value)} placeholder=\"Scout File 1\" /></div>}"
+          );
+          page = page.replace('disabled={!team || loading}', 'disabled={!effectiveTeam || loading}');
+          page = page.replace('<strong>{team || \'No team selected\'}</strong>', "<strong>{effectiveTeam || 'No scouting team selected'}</strong>");
+          page = page.replace('Example: Data Room → Paschal → Scout File 1 → Upload Data.', 'Example: Data Room → Scouting → Paschal → Scout File 1 → Upload Data.');
+          page = page.replace('Team → Scout File → Upload', 'Scouting Team → Scout File → Upload');
+          page = page.replace('Choose a team from your Schedule, choose its Scout File, then upload the scouting data into that file.', 'Choose a Scouting team, choose its Scout File, then upload the scouting data into that file. Live Game teams are intentionally kept out of this workflow.');
+          source = source.slice(0, start) + page + source.slice(end);
+
+          const effect = `  useEffect(() => {\n    let cancelled = false;\n    async function loadTeamOptions() {\n      const scheduleNames = seasonGames.map(game => game.opponent.trim()).filter(Boolean);\n      let scoutingNames: string[] = [];\n      try { scoutingNames = await getScoutingTeamNames(activeSeason); } catch (error) { console.warn('Could not load scouting team names:', error); }\n      if (cancelled) return;\n      setTeamOptions(Array.from(new Set([...scheduleNames, ...scoutingNames])).sort());\n    }\n    void loadTeamOptions();\n    return () => { cancelled = true; };\n  }, [activeSeason, data.schedule]);`;
+          const oldEffect = `  useEffect(() => {\n    const names = Array.from(new Set(seasonGames.map(game => game.opponent.trim()).filter(Boolean))).sort();\n    setTeamOptions(names);\n  }, [activeSeason, data.schedule]);`;
+          source = source.replace(oldEffect, effect);
+
+          const teamBlock = /\n            <div style=\{\{ display: 'flex', alignItems: 'center', gap: 8 \}\}>\n              <label htmlFor="global-team" className="eyebrow" style=\{\{ margin: 0 \}\}>\n                Team\n              <\/label>\n              <select\n                id="global-team"\n                value=\{activeTeam\}\n                onChange=\{event => void selectTeam\(event.target.value\)\}\n                style=\{\{ minWidth: 150 \}\}\n                data-testid="select-global-team"\n              >\n                \{!teamOptions.includes\(activeTeam\) && activeTeam && <option value=\{activeTeam\}>\{activeTeam\}<\/option>\}\n                \{teamOptions.map\(team => \(\n                  <option key=\{team\} value=\{team\}>\{team\}<\/option>\n                \)\}\n              <\/select>\n            <\/div>/;
+          const matches = source.match(teamBlock);
+          if (matches && matches.length > 1) source = source.replace(teamBlock, '');
+
+          fs.writeFileSync(path, source);
+          NODE
+
+      - name: Commit repaired App
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add artifacts/coach-hudl/src/App.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "[auto-team-bucket] Fix scouting upload team visibility"
+          git push
