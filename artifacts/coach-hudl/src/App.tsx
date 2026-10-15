@@ -990,22 +990,6 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   const toast = useToast();
 
   const seasonYear = data.schedule.find(game => game.id === data.activeGameId)?.season || data.schedule[0]?.season || '';
-  const scheduleTeams = Array.from(new Set(
-    data.schedule.filter(game => game.season === seasonYear).map(game => game.opponent.trim()).filter(Boolean)
-  )).sort((a, b) => a.localeCompare(b));
-  const availableTeams = Array.from(new Set([...scheduleTeams, ...scoutingTeams])).sort((a, b) => a.localeCompare(b));
-
-  useEffect(() => {
-    const globalTeam = data.activeTeam?.trim();
-    if (!globalTeam) return;
-    const knownTeam = data.schedule.some(game => game.season === seasonYear && game.opponent.trim().toLowerCase() === globalTeam.toLowerCase()) ||
-      scoutingTeams.some(name => name.trim().toLowerCase() === globalTeam.toLowerCase());
-    if (knownTeam && team !== globalTeam) {
-      setTeam(globalTeam);
-      setScoutId('new');
-      setPreview([]);
-    }
-  }, [data.activeTeam, seasonYear, data.schedule, scoutingTeams]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1015,7 +999,8 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
         const names = await getScoutingTeamNames(seasonYear);
         if (cancelled) return;
         setScoutingTeams(names);
-        const matching = data.activeTeam && [...scheduleTeams, ...names].some(name => name.trim().toLowerCase() === data.activeTeam?.trim().toLowerCase()) ? data.activeTeam : '';
+        const matching = data.activeTeam && names.some(name => name.trim().toLowerCase() === data.activeTeam?.trim().toLowerCase()) ? data.activeTeam : '';
+        setTeam(current => current || matching || '');
         const currentTeam = effectiveTeam || matching;
         if (!currentTeam) { setScouts([]); return; }
         const seasons = await getSeasons();
@@ -1034,7 +1019,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
     }
     void loadScouts();
     return () => { cancelled = true; };
-  }, [seasonYear, effectiveTeam, data.activeTeam, data.schedule]);
+  }, [seasonYear, effectiveTeam, data.activeTeam]);
 
   const selectTeam = (value: string) => {
     setTeam(value);
@@ -1046,7 +1031,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
 
   const handleFile = (file?: File) => {
     if (!file) return;
-    if (!effectiveTeam) { toast.notify('Select an existing Scouting Team or enter a new team name before uploading.'); return; }
+    if (!team) { toast.notify('Select a Team before uploading.'); return; }
     setLoading(true);
     const reader = new FileReader();
     reader.onload = async () => {
@@ -1088,8 +1073,8 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
     <Panel>
       <SectionTitle title="Scout data" detail="Scouting Team → Scout File → Upload" />
       <div className="filters" style={{ alignItems: 'end' }}>
-        <div><label className="eyebrow">Scouting Team</label><select value={team} onChange={event => selectTeam(event.target.value)} data-testid="select-data-room-team"><option value="">Select Scouting Team</option>{availableTeams.map(name => <option key={name} value={name}>{name}</option>)}<option value="__new__">+ New Scouting Team</option></select></div>
-        <div><label className="eyebrow">Scout</label><select value={scoutId} onChange={event => setScoutId(event.target.value)} disabled={!effectiveTeam} data-testid="select-data-room-scout"><option value="new">+ New Scout File</option>{scouts.map(scout => <option key={scout.id} value={scout.id}>{scout.description || 'Scout File'}</option>)}</select></div>
+        <div><label className="eyebrow">Scouting Team</label><select value={team} onChange={event => selectTeam(event.target.value)} data-testid="select-data-room-team"><option value="">Select Scouting Team</option>{scoutingTeams.map(name => <option key={name} value={name}>{name}</option>)}<option value="__new__">+ New Scouting Team</option></select></div>
+        <div><label className="eyebrow">Scout</label><select value={scoutId} onChange={event => setScoutId(event.target.value)} disabled={!team} data-testid="select-data-room-scout"><option value="new">+ New Scout File</option>{scouts.map(scout => <option key={scout.id} value={scout.id}>{scout.description || 'Scout File'}</option>)}</select></div>
         {team === '__new__' && <div><label className="eyebrow">New Scouting Team</label><input className="input" value={newScoutingTeam} onChange={event => setNewScoutingTeam(event.target.value)} placeholder="Arlington Martin" /></div>}{scoutId === 'new' && <div><label className="eyebrow">Scout File Name</label><input className="input" value={newScoutName} onChange={event => setNewScoutName(event.target.value)} placeholder="Scout File 1" /></div>}
         <button className="btn btn-primary" disabled={!effectiveTeam || loading} onClick={() => fileRef.current?.click()} data-testid="button-data-room-upload"><UploadCloud /> {loading ? 'Saving…' : 'Upload Data'}</button>
       </div>
