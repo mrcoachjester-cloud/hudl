@@ -204,7 +204,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
 
   const selectTeam = async (team: string) => {
     const normalizedTeam = team.trim();
-    if (!normalizedTeam || normalizedTeam === activeTeam) return;
+    // If the selected team is already active but its scouting rows were never loaded, still fetch them.
+    if (!normalizedTeam || (normalizedTeam === activeTeam && data.scouting.length > 0)) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
     try {
       const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
