@@ -64,11 +64,11 @@ export function liveDraftToStandard(draft: LivePlayDraft, previousYardLine = '')
 export async function getScoutingSessions(seasonId: string): Promise<ScoutingSession[]> { if (!supabase) return []; const { data, error } = await supabase.from('scouting_sessions').select('*').eq('season_id', seasonId).eq('archived', false).order('created_at', { ascending: false }); if (error) throw error; return data ?? []; }
 export async function getScoutingPlays(sessionId: string): Promise<ScoutingPlay[]> { if (!supabase) return []; const { data, error } = await supabase.from('scouting_plays').select('*').eq('scouting_session_id', sessionId).order('play_no', { ascending: true }); if (error) throw error; return data ?? []; }
 export async function createScoutingSession(input: { seasonId: string; team: string; description: string }): Promise<ScoutingSession | null> { if (!supabase) return null; const id = crypto.randomUUID(); const { error } = await supabase.from('scouting_sessions').insert({ id, season_id: input.seasonId, opponent: input.team.trim(), description: input.description || 'Scout File', archived: false }); if (error) throw error; const { data, error: readError } = await supabase.from('scouting_sessions').select('*').eq('id', id).maybeSingle(); if (readError) throw readError; if (!data) throw new Error('Scout File was created but could not be read back from Supabase.'); return data; }
-const SCOUTING_RESULTS = new Map([
+const SCOUTING_RESULTS = new Map<string, string>([
   'Incomplete', 'Complete', 'Complete, TD', 'Fumble', 'Good', 'Penalty',
   'Return', 'Rush', 'Rush, TD', 'Sack', 'Scramble', '2 Pt.', 'Extra Pt.',
   'Punt', 'FG', 'KO', 'Onside Kick', 'Pass',
-].map((value) => [value.toLowerCase(), value]));
+].map((value) => [value.toLowerCase(), value] as const));
 
 function normalizeScoutingResult(value: string | null | undefined): string | null {
   const result = value?.trim();
