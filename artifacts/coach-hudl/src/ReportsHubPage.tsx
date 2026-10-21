@@ -34,6 +34,108 @@ function buildStats(plays: StandardPlay[]): StatRow[] { const by = new Map<strin
 function csvCell(value: string) { return `"${String(value ?? '').replaceAll('"', '""')}"`; }
 function download(name: string, contents: string) { const blob = new Blob([contents], { type: 'text/csv;charset=utf-8' }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url); }
 
+
+type AdvancedProps = { plays: StandardPlay[]; baseline: StandardPlay[]; mode: 'offense' | 'defense' };
+function AdvancedTendencyPanel({ plays, baseline, mode }: AdvancedProps) {
+  const labels = ['1st & 10+', '2nd & long', '2nd & medium', '2nd & short', '3rd & long', '3rd & medium', '3rd & short', '4th down'];
+  const bucket = (p: StandardPlay) => {
+    const d = num(p.dn), dist = num(p.dist);
+    if (d === 1) return dist >= 10 ? labels[0] : '1st & short';
+    if (d === 2) return dist >= 8 ? labels[1] : dist >= 4 ? labels[2] : labels[3];
+    if (d === 3) return dist >= 7 ? labels[4] : dist >= 3 ? labels[5] : labels[6];
+    if (d === 4) return labels[7];
+    return 'Other';
+  };
+  const situations = [...labels, '1st & short'];
+  const zone = (p: StandardPlay) => {
+    const y = num(p.yardLn);
+    if (y < 0 && Math.abs(y) <= 10) return 'Backed up';
+    if (y < 0 && Math.abs(y) <= 39) return 'Own territory';
+    if ((y < 0 && Math.abs(y) >= 40) || (y >= 0 && y <= 10)) return 'Midfield';
+    if (y > 10 && y <= 39) return 'Red zone';
+    if (y > 39) return 'Goal line';
+    return 'Unknown';
+  };
+  const groups = (source: StandardPlay[], key: (p: StandardPlay) => string) => {
+    const map = new Map<string, StandardPlay[]>();
+    source.forEach(p => { const k = key(p); if (!map.has(k)) map.set(k, []); map.get(k)!.push(p); });
+    return [...map.entries()].map(([name, rows]) => ({ name, rows }));
+  };
+  const runPassLabel = (rows: StandardPlay[]) => rows.length ? `${pct(rows.filter(isRun).length, rows.length)} / ${pct(rows.filter(isPass).length, rows.length)}` : '—';
+  const avgGain = (rows: StandardPlay[]) => rows.length ? avg(rows.reduce((s,p) => s + gain(p), 0), rows.length) : '—';
+  const formationRows = groups(plays.filter(p => p.form && p.form !== '—'), p => p.form).map(g => ({
+    ...g, run: g.rows.filter(isRun).length, pass: g.rows.filter(isPass).length,
+    avg: avgGain(g.rows), top: groups(g.rows, p => p.offPlay || 'Unclassified').sort((a,b) => b.rows.length-a.rows.length)[0]?.name ?? '—',
+    explosive: g.rows.filter(explosive).length,
+  })).sort((a,b) => b.rows.length-a.rows.length).slice(0, 10);
+  const identityRows = [...new Set([...plays, ...baseline].map(p => p.form).filter(v => v && v !== '—'))].map(name => {
+    const current = plays.filter(p => p.form === name);
+    const prior = baseline.filter(p => p.form === name);
+    const currentPct = plays.length ? current.length / plays.length * 100 : 0;
+    const priorPct = baseline.length ? prior.length / baseline.length * 100 : 0;
+    const delta = currentPct - priorPct;
+    return { name, current: current.length, prior: prior.length, currentPct, priorPct, delta,
+      status: plays.length < 5 || baseline.length < 5 ? 'Low sample' : delta >= 15 ? 'Using more' : delta <= -15 ? 'Using less' : 'Similar usage' };
+  }).sort((a,b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 10);
+  const callRows = groups(plays.filter(p => p.offPlay && p.offPlay !== '—'), p => p.offPlay).map(g => ({
+    ...g, run: g.rows.filter(isRun).length, pass: g.rows.filter(isPass).length,
+    avg: avgGain(g.rows), explosive: g.rows.filter(explosive).length,
+    success: g.rows.filter(isFirstDown).length,
+  })).sort((a,b) => b.rows.length-a.rows.length).slice(0, 12);
+  const situationRows = situations.map(name => {
+    const rows = plays.filter(p => bucket(p) === name);
+    const prior = baseline.filter(p => bucket(p) === name);
+    return { name, rows, prior, runPass: runPassLabel(rows), priorRunPass: runPassLabel(prior), avg: avgGain(rows), firstDown: pct(rows.filter(isFirstDown).length, rows.length) };
+  }).filter(r => r.rows.length || r.prior.length);
+  const zoneRows = ['Backed up','Own territory','Midfield','Red zone','Goal line'].map(name => {
+    const rows = plays.filter(p => zone(p) === name);
+    return { name, rows, runPass: runPassLabel(rows), avg: avgGain(rows), explosive: rows.filter(explosive).length };
+  }).filter(r => r.rows.length);
+  const explosives = plays.filter(explosive).sort((a,b) => gain(b)-gain(a));
+  const alerts: string[] = [];
+  const runRate = plays.length ? plays.filter(isRun).length / plays.length * 100 : 0;
+  if (plays.length >= 5 && runRate >= 65) alerts.push(`Run-heavy tendency: ${Math.round(runRate)}% of charted snaps are runs.`);
+  if (plays.length >= 5 && runRate <= 35) alerts.push(`Pass-heavy tendency: ${Math.round(100-runRate)}% of charted snaps are passes.`);
+  const thirdLong = plays.filter(p => bucket(p) === '3rd & long');
+  if (thirdLong.length >= 3 && thirdLong.filter(isPass).length / thirdLong.length >= .7) alerts.push('3rd-and-long is pass-heavy in this sample.');
+  const heavy = formationRows.find(f => f.rows.length >= 3 && f.run / f.rows.length >= .75);
+  if (heavy) alerts.push(`${heavy.name} is run-heavy (${Math.round(heavy.run / heavy.rows.length * 100)}% run).`);
+  if (!alerts.length) alerts.push(plays.length < 5 ? 'Low sample size — chart more plays before treating tendencies as reliable.' : 'No high-confidence automatic tells detected in this sample.');
+  const heading = mode === 'offense' ? 'Advanced offensive tendencies' : 'Advanced defensive tendencies';
+  const ownLabel = mode === 'offense' ? 'Our offense · live' : 'Our defense · live';
+  const baselineLabel = mode === 'offense' ? 'Opponent defense · scout' : 'Opponent offense · scout';
+  return <div className="grid">
+    <Panel><SectionTitle title={heading} detail="Expanded analytics inspired by Sheets-Hudl. Results use the currently selected ODK perspective." />
+      <div className="grid kpi-grid">
+        <Kpi label="Sample size" value={String(plays.length)} note={plays.length < 5 ? 'Low confidence' : plays.length < 10 ? 'Early sample' : 'Charted snaps'} />
+        <Kpi label="Success / 1st down" value={pct(plays.filter(isFirstDown).length, plays.length)} note="Uses result or yards-to-go" green />
+        <Kpi label="Explosive plays" value={String(explosives.length)} note="10+ run / 15+ pass" green />
+        <Kpi label="Average gain" value={avgGain(plays)} note="Yards per snap" />
+      </div>
+    </Panel>
+    <Panel><SectionTitle title="Formation identity" detail={`${ownLabel} · sorted by most-used formation`} />
+      {formationRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>Run / pass</th><th>Avg gain</th><th>Top call</th><th>Explosives</th></tr></thead><tbody>{formationRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{runPassLabel(r.rows)}</td><td>{r.avg}</td><td>{r.top}</td><td>{r.explosive}</td></tr>)}</tbody></table></div> : empty('Formation data is not available for this sample.')}</Panel>
+    <Panel><SectionTitle title="Formation identity changes" detail={`Live formation usage compared with ${baselineLabel}; percentage-point change`} />
+      {identityRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>{ownLabel}</th><th>{baselineLabel}</th><th>Change</th><th>Read</th></tr></thead><tbody>{identityRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.current} ({r.currentPct.toFixed(0)}%)</td><td>{r.prior} ({r.priorPct.toFixed(0)}%)</td><td>{r.delta > 0 ? '+' : ''}{r.delta.toFixed(0)} pts</td><td>{r.status}</td></tr>)}</tbody></table></div> : empty('No matching formation data to compare yet.')}</Panel>
+    <div className="grid split-grid">
+      <Panel><SectionTitle title="Play-call efficiency" detail="Most-used calls with average gain and first-down conversion" />
+        {callRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play call</th><th>Calls</th><th>Avg gain</th><th>1st down %</th><th>Explosive</th></tr></thead><tbody>{callRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{r.avg}</td><td>{pct(r.success,r.rows.length)}</td><td>{r.explosive}</td></tr>)}</tbody></table></div> : empty('Play-call data is not available for this sample.')}</Panel>
+      <Panel><SectionTitle title="Field-zone tendencies" detail="Run / pass split by approximate signed yard-line zone" />
+        {zoneRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Zone</th><th>Snaps</th><th>Run / pass</th><th>Avg gain</th><th>Explosive</th></tr></thead><tbody>{zoneRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{r.runPass}</td><td>{r.avg}</td><td>{r.explosive}</td></tr>)}</tbody></table></div> : empty('Yard-line data is not available for this sample.')}</Panel>
+    </div>
+    <Panel><SectionTitle title="Down-and-distance expectations" detail={`${ownLabel} compared with ${baselineLabel}; small samples should be interpreted cautiously`} />
+      {situationRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Our snaps</th><th>Our run / pass</th><th>Avg gain</th><th>1st down %</th><th>Scout snaps</th><th>Scout run / pass</th></tr></thead><tbody>{situationRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{r.runPass}</td><td>{r.avg}</td><td>{pct(r.rows.filter(isFirstDown).length,r.rows.length)}</td><td>{r.prior.length}</td><td>{r.priorRunPass}</td></tr>)}</tbody></table></div> : empty('Down-and-distance data is not available yet.')}</Panel>
+    <div className="grid split-grid">
+      <Panel><SectionTitle title="Explosive play log" detail="Largest gains first" />
+        {explosives.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>#</th><th>Type</th><th>Formation / call</th><th>Situation</th><th>Gain</th></tr></thead><tbody>{explosives.slice(0,12).map((p,i)=><tr key={`${p.playNo}-${i}`}><td>{p.playNo}</td><td>{p.type}</td><td><strong>{p.form} / {p.offPlay}</strong></td><td>{p.dn}&amp;{p.dist}</td><td>+{gain(p)}</td></tr>)}</tbody></table></div> : empty('No explosive plays in the current sample.')}</Panel>
+      <Panel><SectionTitle title="Coach alerts" detail="Rule-based signals, not guarantees" />
+        <ul style={{ margin: 0, paddingLeft: 20, display: 'grid', gap: 12 }}>{alerts.map((alert,i)=><li key={i}>{alert}</li>)}</ul>
+        <p style={{ color: 'var(--muted, #8b93a5)', fontSize: 12, marginTop: 14 }}>Alerts use minimum sample thresholds where practical. Confirm against film and game context before making calls.</p>
+      </Panel>
+    </div>
+  </div>;
+}
+
 function OffenseReport({ live, scoutDefense }: { live: StandardPlay[]; scoutDefense: StandardPlay[] }) {
   const runs = live.filter(isRun); const passes = live.filter(isPass); const stats = buildStats(live);
   const formations = [...new Set(live.map(p => p.form).filter(Boolean))].map(form => { const rows = live.filter(p => p.form === form); const call = [...new Set(rows.map(p => p.offPlay).filter(Boolean))].map(call => ({ call, count: rows.filter(p => p.offPlay === call).length })).sort((a,b)=>b.count-a.count)[0]?.call ?? '—'; return { form, count: rows.length, run: pct(rows.filter(isRun).length, rows.length), pass: pct(rows.filter(isPass).length, rows.length), call }; }).sort((a,b)=>b.count-a.count).slice(0, 8);
@@ -46,6 +148,7 @@ function OffenseReport({ live, scoutDefense }: { live: StandardPlay[]; scoutDefe
     <div className="grid split-grid"><Panel><SectionTitle title="Top run plays" />{calls('run').length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg</th><th>X</th></tr></thead><tbody>{calls('run').map(row=><tr key={row.call}><td><strong>{row.call}</strong></td><td>{row.count}</td><td>{row.avg}</td><td>{row.explosive}</td></tr>)}</tbody></table></div> : empty('No live run calls yet.')}</Panel><Panel><SectionTitle title="Top pass plays" />{calls('pass').length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Calls</th><th>Avg</th><th>X</th></tr></thead><tbody>{calls('pass').map(row=><tr key={row.call}><td><strong>{row.call}</strong></td><td>{row.count}</td><td>{row.avg}</td><td>{row.explosive}</td></tr>)}</tbody></table></div> : empty('No live pass calls yet.')}</Panel></div>
     <Panel><SectionTitle title="Down & distance" detail="Our live ODK = O compared with opponent D scouting baseline" /><div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Opponent D · scout</th><th>Our O · live</th></tr></thead><tbody>{situations.map(label=><tr key={label}><td><strong>{label}</strong></td><td>{runPass(scoutDefense.filter(p=>situation(p)===label))}</td><td>{runPass(live.filter(p=>situation(p)===label))}</td></tr>)}</tbody></table></div></Panel>
     <Panel><SectionTitle title="Our ball carrier / receiver stats" />{stats.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Player</th><th>Car</th><th>Rush Yds</th><th>YPC</th><th>Rush TD</th><th>Rec</th><th>Rec Yds</th><th>Rec TD</th><th>Fum</th></tr></thead><tbody>{stats.map(row=><tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.carries}</td><td>{row.rushYds}</td><td>{avg(row.rushYds,row.carries)}</td><td>{row.rushTd}</td><td>{row.receptions}</td><td>{row.recYds}</td><td>{row.recTd}</td><td>{row.fumbles}</td></tr>)}</tbody></table></div> : empty('No named live ball carrier / receiver stats yet.')}</Panel>
+    <AdvancedTendencyPanel plays={live} baseline={scoutDefense} mode="offense" />
   </div>;
 }
 
@@ -58,6 +161,7 @@ function DefenseReport({ live, scoutOffense }: { live: StandardPlay[]; scoutOffe
     <Panel><SectionTitle title="Formation tendencies" detail="What the opponent showed vs what our defense saw live" />{formations.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Opponent O · scout</th><th>Our D · live</th></tr></thead><tbody>{formations.map(form=><tr key={form}><td><strong>{form}</strong></td><td>{runPass(scoutOffense.filter(p=>p.form===form))}</td><td>{runPass(live.filter(p=>p.form===form))}</td></tr>)}</tbody></table></div> : empty('No defensive formation data yet.')}</Panel>
     <Panel><SectionTitle title="Defensive flags" detail="Immediate game-day checks" /><div className="grid kpi-grid"><Kpi label="Explosives allowed" value={String(explosiveAllowed)} note="10+ run / 15+ pass" /><Kpi label="1st downs allowed" value={String(live.filter(isFirstDown).length)} /><Kpi label="INT" value={String(live.filter(isInterception).length)} green /><Kpi label="Fumbles" value={String(live.filter(isFumble).length)} /></div></Panel>
     <Panel><SectionTitle title="Recent defensive snaps" />{live.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play</th><th>Situation</th><th>Type</th><th>Formation</th><th>Gain / loss</th><th>Result</th></tr></thead><tbody>{live.slice(-12).reverse().map((p,i)=><tr key={`${p.playNo}-${i}`}><td><strong>#{p.playNo}</strong></td><td>{p.dn}&amp;{p.dist}</td><td>{p.type}</td><td>{p.form}</td><td>{gain(p)>0?`+${gain(p)}`:gain(p)}</td><td>{p.result}</td></tr>)}</tbody></table></div> : empty('No live D entries yet.')}</Panel>
+    <AdvancedTendencyPanel plays={live} baseline={scoutOffense} mode="defense" />
   </div>;
 }
 
