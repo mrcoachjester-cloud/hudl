@@ -229,7 +229,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       ...(data.gameData || {}),
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
-    let targetPlays = gameData[gameId];
+    // In Supabase mode, always reload the selected game from the database instead of trusting an in-memory cache.
+    let targetPlays = isSupabaseConfigured ? undefined : gameData[gameId];
     if (!targetPlays) {
       let livePlays: Play[] = [];
       let scoutingPlays: Play[] = [];
