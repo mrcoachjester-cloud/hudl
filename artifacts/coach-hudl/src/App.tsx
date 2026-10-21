@@ -63,74 +63,21 @@ type Dataset = {
 
 type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule';
 
-const STORAGE_KEY = 'coach-hudl-datasets-v2';
-const demoSchedule: ScheduleGame[] = [
-  { id: 'game-2024-north-ridge', season: '2024', opponent: 'North Ridge', date: '2024-10-18', location: 'Home', result: '—', archived: false },
-  { id: 'game-2023-river-city', season: '2023', opponent: 'River City', date: '2023-10-20', location: 'Away', result: 'W 28-14', archived: true },
-];
-const demoScouting: Play[] = [
-  { playNo:'01', odk:'O', dn:'1', dist:'10', hash:'R', gnls:'7', carrier:'M. Carter', yardLn:'OWN 22', type:'Run', result:'Inside Zone +4', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'4-2-5', motion:'None', offPlay:'IZ', dir:'Right', backfield:'Gun' },
-  { playNo:'02', odk:'O', dn:'2', dist:'6', hash:'L', gnls:'12', carrier:'J. Hayes', yardLn:'OWN 26', type:'Pass', result:'Complete +8', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'4-2-5', motion:'Jet', offPlay:'Glance', dir:'Left', backfield:'Gun' },
-  { playNo:'03', odk:'O', dn:'1', dist:'10', hash:'M', gnls:'18', carrier:'M. Carter', yardLn:'OWN 34', type:'Run', result:'Outside Zone +13', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'Orbit', offPlay:'OZ', dir:'Left', backfield:'Under Center' },
-  { playNo:'04', odk:'O', dn:'1', dist:'10', hash:'R', gnls:'11', carrier:'J. Hayes', yardLn:'OPP 48', type:'Pass', result:'Incomplete', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Nickel', motion:'None', offPlay:'Curl Flat', dir:'Right', backfield:'Gun' },
-  { playNo:'05', odk:'O', dn:'2', dist:'10', hash:'R', gnls:'0', carrier:'M. Carter', yardLn:'OPP 48', type:'Run', result:'Inside Zone +2', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Nickel', motion:'Short', offPlay:'IZ', dir:'Right', backfield:'Gun' },
-  { playNo:'06', odk:'O', dn:'3', dist:'8', hash:'L', gnls:'-2', carrier:'J. Hayes', yardLn:'OPP 46', type:'Pass', result:'Sack -7', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Nickel', motion:'None', offPlay:'Four Verticals', dir:'Left', backfield:'Gun' },
-  { playNo:'07', odk:'O', dn:'1', dist:'10', hash:'M', gnls:'24', carrier:'M. Carter', yardLn:'OPP 39', type:'Run', result:'Counter +18', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'None', offPlay:'GT Counter', dir:'Right', backfield:'Under Center' },
-  { playNo:'08', odk:'O', dn:'2', dist:'7', hash:'L', gnls:'8', carrier:'K. Owens', yardLn:'OPP 21', type:'Pass', result:'Complete +16', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Nickel', motion:'Orbit', offPlay:'Deep Over', dir:'Left', backfield:'Gun' },
-  { playNo:'09', odk:'O', dn:'1', dist:'10', hash:'R', gnls:'5', carrier:'M. Carter', yardLn:'OPP 5', type:'Run', result:'Inside Zone +3', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'Goal Line', motion:'None', offPlay:'IZ', dir:'Right', backfield:'Under Center' },
-  { playNo:'10', odk:'O', dn:'2', dist:'7', hash:'M', gnls:'3', carrier:'J. Hayes', yardLn:'OPP 2', type:'Pass', result:'Touchdown +2', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Goal Line', motion:'Jet', offPlay:'Sprint Out', dir:'Right', backfield:'Gun' },
-  { playNo:'11', odk:'O', dn:'1', dist:'10', hash:'L', gnls:'14', carrier:'M. Carter', yardLn:'OWN 18', type:'Run', result:'Duo +6', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'None', offPlay:'Duo', dir:'Left', backfield:'Under Center' },
-  { playNo:'12', odk:'O', dn:'3', dist:'4', hash:'R', gnls:'4', carrier:'J. Hayes', yardLn:'OWN 24', type:'Pass', result:'Complete +12', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'Nickel', motion:'Short', offPlay:'Stick', dir:'Right', backfield:'Gun' },
-  { playNo:'13', odk:'O', dn:'2', dist:'8', hash:'M', gnls:'19', carrier:'M. Carter', yardLn:'OWN 40', type:'Run', result:'Outside Zone +11', form:'11 Personnel', personnel:'11', scheme:'Spread', defense:'4-2-5', motion:'Jet', offPlay:'OZ', dir:'Left', backfield:'Gun' },
-  { playNo:'14', odk:'O', dn:'3', dist:'2', hash:'L', gnls:'2', carrier:'J. Hayes', yardLn:'OPP 49', type:'Pass', result:'Incomplete', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'None', offPlay:'Boot', dir:'Right', backfield:'Under Center' },
-  { playNo:'15', odk:'O', dn:'1', dist:'10', hash:'R', gnls:'32', carrier:'M. Carter', yardLn:'OPP 44', type:'Run', result:'Counter +22', form:'12 Personnel', personnel:'12', scheme:'Power', defense:'4-3', motion:'Orbit', offPlay:'GT Counter', dir:'Right', backfield:'Under Center' },
-];
 const emptyDataset: Dataset = {
-  scouting: demoScouting,
+  scouting: [],
   live: [],
-  schedule: demoSchedule,
-  activeGameId: demoSchedule[0].id,
-  gameData: { [demoSchedule[0].id]: { scouting: demoScouting, live: [] } },
+  schedule: [],
+  activeGameId: '',
+  activeTeam: '',
+  gameData: {},
 };
 
+// The database is the source of truth; browser storage must not seed football data.
 function safeLoad(): Dataset {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
-    if (!raw) return emptyDataset;
-    const parsed = JSON.parse(raw) as Partial<Dataset>;
-    const schedule = Array.isArray(parsed.schedule) && parsed.schedule.length ? parsed.schedule : demoSchedule;
-    const activeGameId = typeof parsed.activeGameId === 'string' && schedule.some(game => game.id === parsed.activeGameId) ? parsed.activeGameId : schedule[0].id;
-    const gameData: Record<string, { scouting: Play[]; live: Play[] }> =
-      parsed.gameData && typeof parsed.gameData === 'object'
-        ? parsed.gameData
-        : {};
-
-    const currentPlays = gameData[activeGameId] ?? {
-      scouting: activeGameId === demoSchedule[0].id ? demoScouting : [],
-      live: [],
-    };
-
-    return {
-      scouting: currentPlays.scouting,
-      live: currentPlays.live,
-      schedule,
-      activeGameId,
-      activeTeam: typeof parsed.activeTeam === 'string' ? parsed.activeTeam : (schedule.find(game => game.id === activeGameId)?.opponent ?? ''),
-      gameData: {
-        ...gameData,
-        [activeGameId]: currentPlays,
-      },
-    };
-  } catch {
-    return emptyDataset;
-  }
+  return emptyDataset;
 }
-function saveDataset(data: Dataset) {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  } catch (err) {
-    console.warn('Could not persist dataset to localStorage:', err);
-  }
+function saveDataset(_data: Dataset) {
+  // Application data is not persisted to browser storage.
 }
 function num(value: string) { const found = value.match(/-?\d+/); return found ? Number(found[0]) : 0; }
 function normalizeOdk(value: string): string {
@@ -308,8 +255,6 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
         } catch (err) {
           console.warn('Could not fetch game data from Supabase:', err);
         }
-      } else if (gameId === demoSchedule[0].id) {
-        scoutingPlays = demoScouting;
       }
       targetPlays = { scouting: scoutingPlays, live: livePlays };
     }
@@ -1800,7 +1745,7 @@ function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Datase
 function NotFoundPage() { return <div className="content"><PageHead eyebrow="404 · off the board" title="That page isn't charted." description="Use the workspace navigation to get back into the film room." actions={<Link href="/" className="btn btn-primary" data-testid="link-not-found-home"><LayoutDashboard /> Back to overview</Link>} /></div>; }
 
 
-function HudlCsvExportBar() {
+function HudlCsvExportBar({ data }: { data: Dataset }) {
   const [location] = useLocation();
   const [busy, setBusy] = useState(false);
 
@@ -1812,9 +1757,6 @@ function HudlCsvExportBar() {
   function exportHudlCsv(kind: 'live' | 'scouting') {
     setBusy(true);
     try {
-      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
-      if (!raw) return;
-      const data = JSON.parse(raw) as Dataset;
       const game = data.schedule?.find(item => item.id === data.activeGameId);
       const gameData = data.gameData?.[data.activeGameId];
       const plays = kind === 'live' ? (gameData?.live ?? data.live ?? []) : (gameData?.scouting ?? data.scouting ?? []);
@@ -1849,7 +1791,8 @@ function HudlCsvExportBar() {
 
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
-  const [loadingFromSupabase, setLoadingFromSupabase] = useState(isSupabaseConfigured);
+  const [loadingFromSupabase, setLoadingFromSupabase] = useState(true);
+  const [supabaseLoadError, setSupabaseLoadError] = useState('');
 
   const setData = (next: Dataset) => {
     const gameData = {
@@ -1866,6 +1809,7 @@ function Router() {
 
     async function loadSupabaseData() {
       if (!isSupabaseConfigured) {
+        setSupabaseLoadError('Supabase is not configured in this deployment. Check Vercel environment variables VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
         setLoadingFromSupabase(false);
         return;
       }
@@ -1874,6 +1818,9 @@ function Router() {
         const seasons = await getSeasons();
 
         if (!seasons.length) {
+          if (!cancelled) {
+            setDataState({ scouting: [], live: [], schedule: [], activeGameId: '', activeTeam: '', gameData: {} });
+          }
           setLoadingFromSupabase(false);
           return;
         }
@@ -1907,12 +1854,9 @@ function Router() {
         let livePlays: Play[] = [];
         let scoutingPlays: Play[] = [];
 
-        try {
-          if (activeGameId) {
+        if (activeGameId) {
             const remoteLive = await getLivePlays(activeGameId);
-            if (remoteLive.length > 0) {
-              livePlays = remoteLive.map(livePlayToStandard);
-            }
+            livePlays = remoteLive.map(livePlayToStandard);
             const gameObj = schedule.find(g => g.id === activeGameId);
             if (currentSeason && gameObj) {
               const sessions = await getScoutingSessions(currentSeason.id);
@@ -1921,25 +1865,18 @@ function Router() {
               );
               if (matchedSession) {
                 const remoteScout = await getScoutingPlays(matchedSession.id);
-                if (remoteScout.length > 0) {
-                  scoutingPlays = remoteScout.map(scoutingPlayToStandard);
-                }
+                scoutingPlays = remoteScout.map(scoutingPlayToStandard);
               }
             }
-          }
-        } catch (e) {
-          console.warn('Could not fetch remote plays on load:', e);
         }
 
+        setSupabaseLoadError('');
         setDataState(current => {
-          // If we fetched new plays from Supabase, use them. Otherwise, keep whatever was locally cached (current.gameData[activeGameId]), or empty arrays.
-          const localActiveGame = current.gameData?.[activeGameId] || { scouting: [], live: [] };
-          
           const gameData = {
             ...(current.gameData || {}),
             [activeGameId]: {
-              scouting: scoutingPlays.length > 0 ? scoutingPlays : localActiveGame.scouting,
-              live: livePlays.length > 0 ? livePlays : localActiveGame.live,
+              scouting: scoutingPlays,
+              live: livePlays,
             },
           };
           const nextDataset: Dataset = {
@@ -1955,6 +1892,10 @@ function Router() {
         });
       } catch (error) {
         console.error('Could not load football data from Supabase:', error);
+        if (!cancelled) {
+          setSupabaseLoadError(error instanceof Error ? error.message : 'Supabase data could not be loaded. Check browser console and database permissions.');
+          setDataState({ scouting: [], live: [], schedule: [], activeGameId: '', activeTeam: '', gameData: {} });
+        }
       } finally {
         if (!cancelled) {
           setLoadingFromSupabase(false);
@@ -1987,9 +1928,22 @@ function Router() {
     );
   }
 
+  if (supabaseLoadError) {
+    return (
+      <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 24 }}>
+        <div style={{ maxWidth: 640, border: '1px solid hsl(var(--border))', borderRadius: 16, padding: 24 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 700 }}>Supabase data could not be loaded</h1>
+          <p style={{ marginTop: 12 }}>{supabaseLoadError}</p>
+          <p style={{ marginTop: 12, color: 'hsl(var(--muted-foreground))' }}>Browser-stored data is disabled so outdated games and plays cannot silently replace database data. Correct the connection or permissions, then refresh.</p>
+          <button className="btn btn-primary" style={{ marginTop: 16 }} onClick={() => window.location.reload()}>Retry connection</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <AppShell data={data} setData={setData}>
-      <HudlCsvExportBar />
+      <HudlCsvExportBar data={data} />
       <Switch>
         <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
