@@ -68,6 +68,15 @@ function AdvancedTendencyPanel({ plays, baseline, mode }: AdvancedProps) {
     avg: avgGain(g.rows), top: groups(g.rows, p => p.offPlay || 'Unclassified').sort((a,b) => b.rows.length-a.rows.length)[0]?.name ?? '—',
     explosive: g.rows.filter(explosive).length,
   })).sort((a,b) => b.rows.length-a.rows.length).slice(0, 10);
+  const identityRows = [...new Set([...plays, ...baseline].map(p => p.form).filter(v => v && v !== '—'))].map(name => {
+    const current = plays.filter(p => p.form === name);
+    const prior = baseline.filter(p => p.form === name);
+    const currentPct = plays.length ? current.length / plays.length * 100 : 0;
+    const priorPct = baseline.length ? prior.length / baseline.length * 100 : 0;
+    const delta = currentPct - priorPct;
+    return { name, current: current.length, prior: prior.length, currentPct, priorPct, delta,
+      status: plays.length < 5 || baseline.length < 5 ? 'Low sample' : delta >= 15 ? 'Using more' : delta <= -15 ? 'Using less' : 'Similar usage' };
+  }).sort((a,b) => Math.abs(b.delta) - Math.abs(a.delta)).slice(0, 10);
   const callRows = groups(plays.filter(p => p.offPlay && p.offPlay !== '—'), p => p.offPlay).map(g => ({
     ...g, run: g.rows.filter(isRun).length, pass: g.rows.filter(isPass).length,
     avg: avgGain(g.rows), explosive: g.rows.filter(explosive).length,
@@ -106,6 +115,8 @@ function AdvancedTendencyPanel({ plays, baseline, mode }: AdvancedProps) {
     </Panel>
     <Panel><SectionTitle title="Formation identity" detail={`${ownLabel} · sorted by most-used formation`} />
       {formationRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>Snaps</th><th>Run / pass</th><th>Avg gain</th><th>Top call</th><th>Explosives</th></tr></thead><tbody>{formationRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{runPassLabel(r.rows)}</td><td>{r.avg}</td><td>{r.top}</td><td>{r.explosive}</td></tr>)}</tbody></table></div> : empty('Formation data is not available for this sample.')}</Panel>
+    <Panel><SectionTitle title="Formation identity changes" detail={`Live formation usage compared with ${baselineLabel}; percentage-point change`} />
+      {identityRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Formation</th><th>{ownLabel}</th><th>{baselineLabel}</th><th>Change</th><th>Read</th></tr></thead><tbody>{identityRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.current} ({r.currentPct.toFixed(0)}%)</td><td>{r.prior} ({r.priorPct.toFixed(0)}%)</td><td>{r.delta > 0 ? '+' : ''}{r.delta.toFixed(0)} pts</td><td>{r.status}</td></tr>)}</tbody></table></div> : empty('No matching formation data to compare yet.')}</Panel>
     <div className="grid split-grid">
       <Panel><SectionTitle title="Play-call efficiency" detail="Most-used calls with average gain and first-down conversion" />
         {callRows.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Play call</th><th>Calls</th><th>Avg gain</th><th>1st down %</th><th>Explosive</th></tr></thead><tbody>{callRows.map(r=><tr key={r.name}><td><strong>{r.name}</strong></td><td>{r.rows.length}</td><td>{r.avg}</td><td>{pct(r.success,r.rows.length)}</td><td>{r.explosive}</td></tr>)}</tbody></table></div> : empty('Play-call data is not available for this sample.')}</Panel>
