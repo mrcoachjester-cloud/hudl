@@ -627,12 +627,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
   const liveRunPct = livePlays.length ? Math.round((livePlays.filter(p => p.type.toLowerCase().includes('run')).length / livePlays.length) * 100) : 0;
   const runShift = liveRunPct - scoutRunPct;
 
-  const loadDemoScout = () => {
-    if (setData) {
-      setData({ ...data, scouting: demoScouting });
-    }
-  };
-
   return (
     <div className="content">
       <PageHead
@@ -910,10 +904,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
             <div className="empty">
               <Film size={28} />
               <h3>No charted plays for this game</h3>
-              <p>Import a CSV, chart live sideline snaps, or load demo scouting tape.</p>
-              <button className="btn btn-primary" onClick={loadDemoScout} data-testid="button-overview-load-demo">
-                <Sparkles /> Load demo scouting data
-              </button>
+              <p>Import a CSV or upload scouting tape to populate this game from your data.</p>
             </div>
           )}
         </Panel>
@@ -1462,7 +1453,13 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   const live = data.live;
   
   const previousYardLine = live.at(-1)?.yardLn || '-20';
-  const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), startYardLn: previousYardLine, yardLn: '-22', form: '', offPlay: '', carrier: '', defense: '', result: '' });
+  const [form, setForm] = useState<Play>({
+    playNo: String(data.live.length + 1).padStart(2, '0'),
+    odk: 'O', dn: '1', dist: '10', hash: 'M', gnls: '0', carrier: '',
+    yardLn: '-22', type: 'Run', result: '', form: '', personnel: '',
+    scheme: '', defense: '', motion: 'None', offPlay: '', dir: '', backfield: '',
+    startYardLn: previousYardLine,
+  });
   
   // Keep form.startYardLn in sync with previousYardLine when a new play is added or deleted
   useEffect(() => {
