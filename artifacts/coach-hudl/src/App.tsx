@@ -1088,33 +1088,9 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   </div>;
 }
 
-function ScoutPage({ data, team, season }: { data: Dataset; team: string; season: string }) {
-  // Scouting is loaded independently from Live Game state so selecting an opponent
-  // cannot accidentally reuse the active game's play array.
-  const [source, setSource] = useState<Play[]>([]);
+function ScoutPage({ data }: { data: Dataset }) {
+  const source = data.scouting;
   const [view, setView] = useState<ScoutView>('dashboard');
-
-  useEffect(() => {
-    let cancelled = false;
-    setSource([]);
-    async function loadSelectedTeamScouting() {
-      if (isSupabaseConfigured && team && season) {
-        try {
-          const plays = await getScoutingPlaysForTeam(season, team);
-          if (!cancelled) setSource(plays);
-          return;
-        } catch (error) {
-          console.error('Could not load scouting plays for selected team:', error);
-          if (!cancelled) setSource([]);
-          return;
-        }
-      }
-      // Keep the local/demo workflow available only when Supabase is not configured.
-      if (!cancelled && !isSupabaseConfigured) setSource(data.scouting);
-    }
-    void loadSelectedTeamScouting();
-    return () => { cancelled = true; };
-  }, [team, season, data.scouting]);
   const [search, setSearch] = useState('');
 
   // DASHBOARD yellow-cell filters (Apps Script rows 3-7, columns B / E / H / K).
@@ -2017,7 +1993,7 @@ function Router() {
       <Switch>
         <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
-        <Route path="/scout"><ScoutPage data={data} team={data.activeTeam ?? data.schedule.find(game => game.id === data.activeGameId)?.opponent ?? ''} season={data.schedule.find(game => game.id === data.activeGameId)?.season ?? ''} /></Route>
+        <Route path="/scout"><ScoutPage data={data} /></Route>
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
         <Route path="/reports"><ReportsHubPage data={data} /></Route>
         <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
