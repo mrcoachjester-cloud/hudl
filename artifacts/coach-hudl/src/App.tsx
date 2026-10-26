@@ -260,21 +260,37 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     const normalizedTeam = team.trim();
     if (!normalizedTeam || normalizedTeam === activeTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
+    let scouting: Play[] = [];
     try {
-      const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({
-        ...data,
-        activeTeam: normalizedTeam,
-        activeGameId: teamGame?.id ?? data.activeGameId,
-        scouting,
-        live,
-      });
+      scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
     } catch (error) {
       console.error('Could not load team scouting data:', error);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
     }
+
+    // Live Game is sourced only from the selected game's Supabase plays.
+    // Never reuse cached plays from a prior selection when the remote game is empty.
+    let live: Play[] = [];
+    if (teamGame && isSupabaseConfigured) {
+      try {
+        live = (await getLivePlays(teamGame.id)).map(livePlayToStandard);
+      } catch (error) {
+        console.error('Could not load selected team Live Game plays:', error);
+      }
+    } else if (teamGame && !isSupabaseConfigured) {
+      live = data.gameData?.[teamGame.id]?.live ?? [];
+    }
+
+    setData({
+      ...data,
+      activeTeam: normalizedTeam,
+      activeGameId: teamGame?.id ?? '',
+      scouting,
+      live,
+      gameData: {
+        ...(data.gameData || {}),
+        ...(teamGame ? { [teamGame.id]: { scouting, live } } : {}),
+      },
+    });
   };
 
   const selectGame = async (gameId: string) => {
@@ -284,13 +300,16 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
     let targetPlays = gameData[gameId];
-    if (!targetPlays) {
-      let livePlays: Play[] = [];
-      let scoutingPlays: Play[] = [];
-      if (isSupabaseConfigured) {
-        try {
-          const remoteLive = await getLivePlays(gameId);
-          if (remoteLive.length > 0) livePlays = remoteLive.map(livePlayToStandard);
+    if (!targetPlays) targetPlays = { scouting: [], live: [] };
+
+    if (isSupabaseConfigured) {
+      try {
+        // Always refresh Live Game from the selected game's own Supabase rows,
+        // even when this game already has a browser-cached entry.
+        const remoteLive = await getLivePlays(gameId);
+        const livePlays = remoteLive.map(livePlayToStandard);
+        let scoutingPlays = targetPlays.scouting;
+        if (scoutingPlays.length === 0) {
           const gameObj = data.schedule.find(g => g.id === gameId);
           const seasons = await getSeasons();
           const currentSeason = seasons.find(s => s.is_current) ?? seasons[0];
@@ -306,13 +325,14 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
               if (remoteScout.length > 0) scoutingPlays = remoteScout.map(scoutingPlayToStandard);
             }
           }
-        } catch (err) {
-          console.warn('Could not fetch game data from Supabase:', err);
         }
-      } else if (gameId === demoSchedule[0].id) {
-        scoutingPlays = demoScouting;
+        targetPlays = { scouting: scoutingPlays, live: livePlays };
+      } catch (err) {
+        console.warn('Could not refresh selected game data from Supabase:', err);
+        targetPlays = { ...targetPlays, live: [] };
       }
-      targetPlays = { scouting: scoutingPlays, live: livePlays };
+    } else if (!gameData[gameId] && gameId === demoSchedule[0].id) {
+      targetPlays = { scouting: demoScouting, live: [] };
     }
     setData({
       ...data,
@@ -2018,14 +2038,15 @@ function Router() {
         }
 
         setDataState(current => {
-          // If we fetched new plays from Supabase, use them. Otherwise, keep whatever was locally cached (current.gameData[activeGameId]), or empty arrays.
+          // Supabase is authoritative for Live Game plays. An empty result means
+          // this game has no saved live plays; don't resurrect another game's browser cache.
           const localActiveGame = current.gameData?.[activeGameId] || { scouting: [], live: [] };
-          
+
           const gameData = {
             ...(current.gameData || {}),
             [activeGameId]: {
               scouting: scoutingPlays.length > 0 ? scoutingPlays : localActiveGame.scouting,
-              live: livePlays.length > 0 ? livePlays : localActiveGame.live,
+              live: isSupabaseConfigured ? livePlays : localActiveGame.live,
             },
           };
           const nextDataset: Dataset = {
