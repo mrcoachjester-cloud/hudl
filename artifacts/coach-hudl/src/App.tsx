@@ -1,8 +1,8 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { appendScoutingPlays, createGame, createLivePlay, createScoutingSession, getGames, getLivePlayDraft, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, liveDraftToStandard, livePlayToStandard, scoutingPlayToStandard, updateLivePlayByNumber, upsertLivePlayDraft, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
 import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
-import { isSupabaseConfigured, supabase } from './lib/supabase';
+import { isSupabaseConfigured } from './lib/supabase';
 import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
 import {
   Activity,
@@ -1517,99 +1517,26 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   
   const previousYardLine = live.at(-1)?.yardLn || '-20';
   const [form, setForm] = useState<Play>({ ...demoScouting[0], playNo: String(data.live.length + 1).padStart(2, '0'), startYardLn: previousYardLine, yardLn: '-22', form: '', offPlay: '', carrier: '', defense: '', result: '' });
-  // LIVE_REALTIME_SHARED_RESTORED
-  const liveBroadcastRef = useRef<any>(null);
-  const liveSyncRevisionRef = useRef(0);
-  useEffect(() => {
-    if (!isSupabaseConfigured || !supabase || !data.activeGameId) return;
-    let cancelled = false;
-    const gameId = data.activeGameId;
-    const refreshSaved = async () => {
-      const revision = liveSyncRevisionRef.current;
-      try {
-        const rows = await getLivePlays(gameId);
-        if (cancelled || revision !== liveSyncRevisionRef.current) return;
-        if (rows.length) {
-          const remote = rows.map(livePlayToStandard);
-          setData({ ...data, live: remote, gameData: { ...(data.gameData || {}), [gameId]: { ...(data.gameData?.[gameId] || { scouting: data.scouting, live: [] }), live: remote } } });
-        }
-      } catch (error) {
-        console.warn('Could not refresh shared Live Game plays:', error);
-      }
-    };
-    const channel = supabase.channel('live-game-sync:' + gameId);
-    liveBroadcastRef.current = channel;
-    channel
-      .on('broadcast', { event: 'live-draft' }, ({ payload }) => {
-        if (cancelled || !payload?.form) return;
-        setForm(payload.form as Play);
-      })
-      .on('broadcast', { event: 'live-saved-refresh' }, () => { void refreshSaved(); })
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'plays', filter: 'game_id=eq.' + gameId }, () => { void refreshSaved(); })
-      .subscribe((status) => {
-        if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') console.warn('Live Game realtime channel status:', status);
-      });
-    const initialize = async () => {
-      try {
-        const rows = await getLivePlays(gameId);
-        if (cancelled) return;
-        if (rows.length) {
-          const remote = rows.map(livePlayToStandard);
-          setData({ ...data, live: remote, gameData: { ...(data.gameData || {}), [gameId]: { ...(data.gameData?.[gameId] || { scouting: data.scouting, live: [] }), live: remote } } });
-        } else if (data.live.length) {
-          // Migrate existing local-only snaps once when no saved rows exist for this game.
-          for (const play of data.live) await createLivePlay(gameId, play);
-          if (!cancelled) void refreshSaved();
-        }
-        const draft = await getLivePlayDraft(gameId);
-        if (!cancelled && draft && !data.live.length) setForm(liveDraftToStandard(draft, previousYardLine));
-      } catch (error) {
-        console.warn('Could not initialize shared Live Game board:', error);
-      }
-    };
-    void initialize();
-    return () => {
-      cancelled = true;
-      if (liveBroadcastRef.current === channel) liveBroadcastRef.current = null;
-      void supabase.removeChannel(channel);
-    };
-  }, [data.activeGameId]);
-
-  const broadcastDraft = (nextForm: Play) => {
-    if (!isSupabaseConfigured || !data.activeGameId || !liveBroadcastRef.current) return;
-    const payload = { ...nextForm, startingYardLine: nextForm.startYardLn || previousYardLine };
-    void Promise.resolve(liveBroadcastRef.current.send({ type: 'broadcast', event: 'live-draft', payload: { form: nextForm } }))
-      .then(() => upsertLivePlayDraft(data.activeGameId, payload))
-      .catch(error => console.warn('Could not sync in-progress Live Game entry:', error));
-  };
-
   
   // Keep form.startYardLn in sync with previousYardLine when a new play is added or deleted
   useEffect(() => {
     setForm(current => ({ ...current, startYardLn: previousYardLine }));
   }, [previousYardLine]);
 
-  const update = (key: keyof Play, value: string) => { const next = { ...form, [key]: value }; setForm(next); broadcastDraft(next); };
+  const update = (key: keyof Play, value: string) => setForm(current => ({ ...current, [key]: value }));
   const actualStart = form.startYardLn ? normalizeYardLine(form.startYardLn) : previousYardLine;
   const normalizedFormYardLine = normalizeYardLine(form.yardLn);
   const calculatedGnls = calculateGnls(actualStart, normalizedFormYardLine);
 
   const resultOptions = ['Complete', 'Complete TD', 'Fumble', 'Good', 'Incomplete', 'Interception', 'No Good', 'Penalty', 'Return', 'Rush', 'Rush TD', 'Sack', 'Scramble', '2 Pt', 'Extra Pt', 'Punt', 'FG', 'Onside Kick', 'Pass'];
 
-  const addPlay = async () => {
+  const addPlay = () => {
     if (!form.yardLn.trim()) { toast.notify('Enter the end yard line after the snap'); return; }
     if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
     if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
     
-    const nextPlayNumber = Math.max(0, ...live.map(play => num(play.playNo))) + 1;
-    const savedPlay = { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(nextPlayNumber).padStart(2, '0') };
-    liveSyncRevisionRef.current++;
-    try { if (isSupabaseConfigured && data.activeGameId) await createLivePlay(data.activeGameId, savedPlay); }
-    catch (error) { console.error('Could not save live snap to Supabase:', error); toast.notify('Could not save snap to shared game data'); return; }
-    const nextLive = [...live, savedPlay];
-    const next = { ...data, live: nextLive, gameData: { ...(data.gameData || {}), [data.activeGameId]: { scouting: data.scouting, live: nextLive } } };
+    const next = { ...data, live: [...live, { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(live.length + 1).padStart(2, '0') }] };
     setData(next);
-    void liveBroadcastRef.current?.send({ type: 'broadcast', event: 'live-saved-refresh', payload: { gameId: data.activeGameId } });
     
     // reset form for next play
     setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), startYardLn: normalizedFormYardLine, yardLn: '', gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
@@ -1621,17 +1548,8 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
     const reader = new FileReader();
     reader.onload = () => {
       const parsed = deriveLiveGains(parseCsv(String(reader.result ?? '')), previousYardLine);
-      const imported = parsed.map((play, index) => ({ ...play, playNo: String(Math.max(0, ...live.map(item => num(item.playNo))) + index + 1).padStart(2, '0') }));
-      const saveImported = async () => {
-        try {
-          if (isSupabaseConfigured && data.activeGameId) for (const play of imported) await createLivePlay(data.activeGameId, play);
-          const nextLive = [...live, ...imported];
-          setData({ ...data, live: nextLive, gameData: { ...(data.gameData || {}), [data.activeGameId]: { scouting: data.scouting, live: nextLive } } });
-          void liveBroadcastRef.current?.send({ type: 'broadcast', event: 'live-saved-refresh', payload: { gameId: data.activeGameId } });
-          toast.notify(`${parsed.length} live snaps imported with yard-line gains`);
-        } catch (error) { console.error('Could not import live snaps to shared game data:', error); toast.notify('Live CSV import could not be saved to shared game data'); }
-      };
-      void saveImported();
+      setData({ ...data, live: [...live, ...parsed] });
+      toast.notify(`${parsed.length} live snaps imported with yard-line gains`);
     };
     reader.readAsText(file);
   };
@@ -1639,25 +1557,12 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {
     const actualIndex = live.length - 1 - displayIndex;
     const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);
-    const recalculated = recalculateLiveGains(nextLive, '-20');
-    liveSyncRevisionRef.current++;
-    setData({ ...data, live: recalculated, gameData: { ...(data.gameData || {}), [data.activeGameId]: { scouting: data.scouting, live: recalculated } } });
-    if (isSupabaseConfigured && data.activeGameId && recalculated[actualIndex]) {
-      void updateLivePlayByNumber(data.activeGameId, Number(recalculated[actualIndex].playNo) || actualIndex + 1, recalculated[actualIndex]).catch(error => console.warn('Could not save edited live snap:', error));
-    }
+    setData({ ...data, live: recalculateLiveGains(nextLive, '-20') }); // recalculated from start
   };
 
   const removeLiveRow = (displayIndex: number) => {
     const actualIndex = live.length - 1 - displayIndex;
-    const removedPlay = live[actualIndex];
-    const nextLive = live.filter((_, index) => index !== actualIndex);
-    liveSyncRevisionRef.current++;
-    setData({ ...data, live: nextLive, gameData: { ...(data.gameData || {}), [data.activeGameId]: { scouting: data.scouting, live: nextLive } } });
-    if (isSupabaseConfigured && supabase && data.activeGameId && removedPlay) {
-      void supabase.from('plays').delete().eq('game_id', data.activeGameId).eq('play_number', Number(removedPlay.playNo)).then(({ error }) => {
-        if (error) console.warn('Could not delete live snap from shared game data:', error);
-      });
-    }
+    setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
     toast.notify('Live snap removed');
   };
 
