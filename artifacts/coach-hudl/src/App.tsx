@@ -1361,7 +1361,7 @@ function ScoutPage({ data }: { data: Dataset }) {
       eyebrow="Scouting · tendency board"
       title="Find the tell."
       description="Every report from the Kangaroos scouting workbook, driven live off the current chart. Success is 4+ yards on 1st, half the sticks on 2nd, and a conversion on 3rd or 4th."
-      actions={<><button className="btn btn-primary" onClick={() => { setPresentationMeta(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '' })); setShowPresentationOptions(true); setPresentationError(''); }} data-testid="button-scout-presentation"><Download /> Generate PDF + PowerPoint</button><Link href="/reports" className="btn btn-ghost" data-testid="link-scout-reports"><ClipboardList /> Build report</Link></>}
+      actions={<><button className="btn btn-primary" onClick={() => { setPresentationMeta(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '' })); setShowPresentationOptions(true); setPresentationError(''); }} data-testid="button-scout-presentation"><Download /> Generate PDF + PowerPoint</button><button className="btn btn-ghost" onClick={() => { setReportFields(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '', team: data.activeTeam || current.team || '' })); setReportType('defense'); setReportStep(0); setReportError(''); setShowReportBuilder(true); }} data-testid="button-scout-build-report"><ClipboardList /> Build Report</button></>}
     />
 
     {showPresentationOptions && <Panel>
