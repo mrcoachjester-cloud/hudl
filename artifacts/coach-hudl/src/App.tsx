@@ -261,30 +261,13 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
     try {
       const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-      let live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      if (teamGame && live.length === 0 && isSupabaseConfigured) {
-        try {
-          const remoteLive = await getLivePlays(teamGame.id);
-          if (remoteLive.length > 0) live = remoteLive.map(livePlayToStandard);
-        } catch (liveError) {
-          console.warn('Could not load saved Live Game plays for selected team:', liveError);
-        }
-      }
-      const gameData = teamGame ? {
-        ...(data.gameData || {}),
-        [teamGame.id]: {
-          ...(data.gameData?.[teamGame.id] || { scouting: [], live: [] }),
-          scouting: data.gameData?.[teamGame.id]?.scouting ?? [],
-          live,
-        },
-      } : data.gameData;
+      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
       setData({
         ...data,
         activeTeam: normalizedTeam,
         activeGameId: teamGame?.id ?? data.activeGameId,
         scouting,
         live,
-        gameData,
       });
     } catch (error) {
       console.error('Could not load team scouting data:', error);
@@ -300,9 +283,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
     let targetPlays = gameData[gameId];
-    // An empty cached entry is not proof that this game has no saved live plays.
-    // Recheck Supabase whenever either board is missing data.
-    if (!targetPlays || targetPlays.live.length === 0 || targetPlays.scouting.length === 0) {
+    if (!targetPlays) {
       let livePlays: Play[] = [];
       let scoutingPlays: Play[] = [];
       if (isSupabaseConfigured) {
@@ -330,10 +311,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       } else if (gameId === demoSchedule[0].id) {
         scoutingPlays = demoScouting;
       }
-      targetPlays = {
-        scouting: scoutingPlays.length > 0 ? scoutingPlays : (targetPlays?.scouting ?? []),
-        live: livePlays.length > 0 ? livePlays : (targetPlays?.live ?? []),
-      };
+      targetPlays = { scouting: scoutingPlays, live: livePlays };
     }
     setData({
       ...data,
