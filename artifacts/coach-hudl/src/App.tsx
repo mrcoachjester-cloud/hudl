@@ -255,26 +255,9 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     return () => { cancelled = true; };
   }, [activeSeason, data.schedule]);
 
-  // Load scouting plays for the currently selected team from Supabase on entry/team changes.
-  useEffect(() => {
-    let cancelled = false;
-    async function loadSelectedTeamScouting() {
-      if (!isSupabaseConfigured || !activeSeason || !activeTeam) return;
-      try {
-        const scouting = await getScoutingPlaysForTeam(activeSeason, activeTeam);
-        if (cancelled) return;
-        setData({ ...data, scouting });
-      } catch (error) {
-        console.error('Could not load selected team scouting data:', error);
-      }
-    }
-    void loadSelectedTeamScouting();
-    return () => { cancelled = true; };
-  }, [activeSeason, activeTeam]);
-
   const selectTeam = async (team: string) => {
     const normalizedTeam = team.trim();
-    if (!normalizedTeam) return;
+    if (!normalizedTeam || normalizedTeam === activeTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
     try {
       const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
