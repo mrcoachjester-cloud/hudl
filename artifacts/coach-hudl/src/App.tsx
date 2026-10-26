@@ -1383,6 +1383,56 @@ function ScoutPage({ data }: { data: Dataset }) {
       <p className="field-hint" style={{ marginTop: 10 }}>The report is built from this selected team’s scouting chart only. Tables split across pages/slides, long cells shrink to fit, and layout checks stop content from crossing slide or footer boundaries.</p>
     </Panel>}
 
+    {showReportBuilder && <Panel>
+      <SectionTitle
+        title="Build weekly player handout"
+        detail={'Step ' + (reportStep + 1) + ' of ' + reportPageCount + ' · ' + (reportFields.opponent || data.activeTeam || 'Selected opponent') + ' · scouting upload only'}
+        link={<button className="btn btn-ghost" onClick={() => setShowReportBuilder(false)} disabled={reportBusy}><X size={15} /> Close</button>}
+      />
+      <div className="form-grid" style={{ marginBottom: 16 }}>
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label>Report type</label>
+          <div className="actions">
+            <button className={'btn ' + (reportType === 'offense' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setReportType('offense'); setReportStep(0); }} disabled={reportBusy} data-testid="button-report-for-offense">For Offense</button>
+            <button className={'btn ' + (reportType === 'defense' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setReportType('defense'); setReportStep(0); }} disabled={reportBusy} data-testid="button-report-for-defense">For Defense</button>
+          </div>
+          <p className="field-hint">The report uses available scouting uploads and site information. Fill in coaching details that are not in the chart.</p>
+        </div>
+      </div>
+      {reportStep === 0 && <div className="form-grid">
+        <div className="field"><label htmlFor="weekly-report-opponent">Opponent</label><input id="weekly-report-opponent" className="input" value={reportFields.opponent || ''} onChange={event => updateReportField('opponent', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-team">Our team</label><input id="weekly-report-team" className="input" value={reportFields.team || ''} onChange={event => updateReportField('team', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-date">Game / report date</label><input id="weekly-report-date" type="date" className="input" value={reportFields.reportDate || ''} onChange={event => updateReportField('reportDate', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-week">Week / game number</label><input id="weekly-report-week" className="input" value={reportFields.week || ''} onChange={event => updateReportField('week', event.target.value)} placeholder="Week 8" /></div>
+        <div className="field"><label htmlFor="weekly-report-location">Location</label><select id="weekly-report-location" className="input" value={reportFields.location || 'Unknown'} onChange={event => updateReportField('location', event.target.value)}><option>Unknown</option><option>Home</option><option>Away</option><option>Neutral</option></select></div>
+        <div className="field"><label htmlFor="weekly-report-prepared-by">Prepared by</label><input id="weekly-report-prepared-by" className="input" value={reportFields.preparedBy || ''} onChange={event => updateReportField('preparedBy', event.target.value)} placeholder="Coach name" /></div>
+      </div>}
+      {reportStep > 0 && reportStep <= reportPages.length && <div>
+        <div className="callout" style={{ marginBottom: 14 }}><ClipboardList size={16} /><span><strong>{reportPages[reportStep - 1].title}</strong> — enter coaching notes intended for the player handout. Tendencies from the scouting file are added automatically at the end.</span></div>
+        <div className="form-grid">
+          {reportPages[reportStep - 1].fields.map(([label, key]) => <div className="field" key={key} style={{ gridColumn: '1 / -1' }}>
+            <label htmlFor={'weekly-report-' + key}>{label}</label>
+            <textarea id={'weekly-report-' + key} className="input" rows={3} value={reportFields[key] || ''} onChange={event => updateReportField(key, event.target.value)} placeholder="Add verified information and coaching instructions…" />
+          </div>)}
+        </div>
+      </div>}
+      {reportStep === reportPages.length + 1 && <div>
+        <div className="callout"><Check size={16} /><span><strong>Ready to create the handout.</strong> The PDF will include your completed sections plus a scouting-data snapshot calculated from {source.length} plays for the selected scouting team. Blank coach-entered sections will be omitted.</span></div>
+        <div className="feed" style={{ marginTop: 14 }}>
+          <div className="feed-row"><span className="feed-num"><ClipboardList size={15} /></span><div className="feed-main"><strong>{reportType === 'defense' ? 'For Defense' : 'For Offense'}</strong><span>{reportPages.map(page => page.title).join(' · ')}</span></div></div>
+          <div className="feed-row"><span className="feed-num"><FileSpreadsheet size={15} /></span><div className="feed-main"><strong>Automatic scouting snapshot</strong><span>Formation, play-call, personnel, motion, down tendencies, run/pass rates, and explosive plays.</span></div></div>
+        </div>
+      </div>}
+      {reportError && <div className="callout" role="alert" style={{ marginTop: 12, color: '#b42318' }}><CircleAlert size={16} /><span>{reportError}</span></div>}
+      <div className="actions" style={{ marginTop: 18, alignItems: 'center', justifyContent: 'space-between' }}>
+        <button className="btn btn-ghost" onClick={() => setReportStep(step => Math.max(0, step - 1))} disabled={reportStep === 0 || reportBusy}><ChevronRight style={{ transform: 'rotate(180deg)' }} size={15} /> Back</button>
+        <span className="eyebrow">Page {reportStep + 1} / {reportPageCount}</span>
+        {reportStep < reportPages.length + 1
+          ? <button className="btn btn-primary" onClick={() => setReportStep(step => Math.min(reportPages.length + 1, step + 1))} disabled={reportBusy}><ChevronRight size={15} /> Next page</button>
+          : <button className="btn btn-primary" onClick={createWeeklyReport} disabled={reportBusy || !source.length} data-testid="button-create-weekly-report"><Download size={15} /> {reportBusy ? 'Creating document…' : 'Create Document (PDF)'}</button>}
+      </div>
+    </Panel>}
+
     <div className="filters report-tabs">
       {SCOUT_VIEWS.map(item => {
         const Icon = item.icon;
