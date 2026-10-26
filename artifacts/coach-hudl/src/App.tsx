@@ -1640,6 +1640,18 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
     toast.notify(`Live snap added · GN/LS ${formatGnls(calculatedGnls)}`);
   };
 
+  const exportLiveHudlCsv = () => {
+    if (!live.length) {
+      window.alert('There are no live plays to export yet.');
+      return;
+    }
+    const game = data.schedule?.find(item => item.id === data.activeGameId);
+    const prefix = game
+      ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
+      : new Date().toISOString().slice(0, 10);
+    download(hudlCsvFilename(prefix, 'LiveGame'), standardPlaysToHudlCsv(live));
+  };
+
   const importLive = (file?: File) => {
     if (!file) return;
     const reader = new FileReader();
@@ -1677,7 +1689,7 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
 
   const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => (key === 'yardLn' || key === 'startYardLn') && updateLiveRow(displayIndex, key, normalizeYardLine(event.currentTarget.value))} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
 
-  return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button></>} />
+  return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button><button className="btn btn-primary" onClick={exportLiveHudlCsv} data-testid="button-export-live-hudl"><Download /> Hudl CSV — Live Game</button></>} />
     <Panel><SectionTitle title="Add a live snap" detail="Choose O, D, or K. GN/LS calculates from start to end yard line." /><div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{startYardLineField}{endYardLineField}{editableField('form', 'Formation')}{editableField('offPlay', 'Play call')}{field('type', 'Play type', ['Run', 'Pass'])}{editableField('carrier', 'Ball carrier')}{field('result', 'Result', resultOptions)}{editableField('defense', 'Defense')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {actualStart}</span></div></div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
     <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live game spreadsheet" detail={live.length ? `${live.length} snaps · click any cell to edit` : 'Your saved snaps will appear here'} /></div>{live.length ? <div className="table-wrap"><table className="data-table live-sheet"><thead><tr><th>Play</th><th>ODK</th><th>Down</th><th>Dist</th><th>Start</th><th>End</th><th>Formation</th><th>Play call</th><th>Play type</th><th>Ball carrier</th><th>Result</th><th>Defense</th><th>GN/LS</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'startYardLn', play.startYardLn ?? '')}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type, ['Run', 'Pass'])}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result, resultOptions)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => removeLiveRow(i)} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No live snaps yet</h3><p>Add a snap above or import a live CSV. Saved snaps stay editable here.</p></div>}</Panel>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
   </div>;
@@ -1916,53 +1928,6 @@ function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Datase
 function NotFoundPage() { return <div className="content"><PageHead eyebrow="404 · off the board" title="That page isn't charted." description="Use the workspace navigation to get back into the film room." actions={<Link href="/" className="btn btn-primary" data-testid="link-not-found-home"><LayoutDashboard /> Back to overview</Link>} /></div>; }
 
 
-function HudlCsvExportBar() {
-  const [location] = useLocation();
-  const [busy, setBusy] = useState(false);
-
-  const route = location.split('?')[0];
-  const isLive = route === '/live';
-  const isDataRoom = route === '/scout' || route === '/reports';
-  if (!isLive && !isDataRoom) return null;
-
-  function exportHudlCsv(kind: 'live' | 'scouting') {
-    setBusy(true);
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
-      if (!raw) return;
-      const data = JSON.parse(raw) as Dataset;
-      const game = data.schedule?.find(item => item.id === data.activeGameId);
-      const gameData = data.gameData?.[data.activeGameId];
-      const plays = kind === 'live' ? (gameData?.live ?? data.live ?? []) : (gameData?.scouting ?? data.scouting ?? []);
-      if (!plays.length) {
-        window.alert(kind === 'live' ? 'There are no live plays to export yet.' : 'There are no Data Room plays to export yet.');
-        return;
-      }
-      const prefix = game
-        ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
-        : new Date().toISOString().slice(0, 10);
-      download(hudlCsvFilename(prefix, kind === 'live' ? 'LiveGame' : 'DataRoom'), standardPlaysToHudlCsv(plays));
-    } finally {
-      window.setTimeout(() => setBusy(false), 250);
-    }
-  }
-
-  return (
-    <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => exportHudlCsv(isLive ? 'live' : 'scouting')}
-        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-        title={isLive ? 'Export the current Live Game as Connect CSV' : 'Export the current Data Room plays as Connect CSV'}
-      >
-        <Download size={16} />
-        {isLive ? 'Hudl CSV — Live Game' : 'Hudl CSV — Data Room'}
-      </button>
-    </div>
-  );
-}
-
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
   const [loadingFromSupabase, setLoadingFromSupabase] = useState(isSupabaseConfigured);
@@ -2105,7 +2070,6 @@ function Router() {
 
   return (
     <AppShell data={data} setData={setData}>
-      <HudlCsvExportBar />
       <Switch>
         <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
