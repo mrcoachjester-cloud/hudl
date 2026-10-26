@@ -24,6 +24,8 @@ type ConceptRow = {
   explosiveRate: number;
 };
 
+const RUN_CELL: CSSProperties = { backgroundColor: '#dcfce7', color: '#166534', fontWeight: 700 };
+const PASS_CELL: CSSProperties = { backgroundColor: '#dbeafe', color: '#1d4ed8', fontWeight: 700 };
 const UNCLASSIFIED_ZONE = 'UNCLASSIFIED';
 const FIELD_ZONES = ['BACKED UP (Own 1-10)', 'OWN TERRITORY (Own 11-39)', 'MIDFIELD (Own 40 - Opp 40)', 'RED ZONE (Opp 11-39)', 'GOAL LINE (Opp 1-10)'];
 const DISTANCE_BUCKETS = ['1-3 (SHORT)', '4-7 (MEDIUM)', '8+ (LONG)'];
