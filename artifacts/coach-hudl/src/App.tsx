@@ -4,6 +4,7 @@ import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
 import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
+import { downloadScoutingPresentation, type PresentationMeta } from './lib/scoutingPresentation';
 import {
   Activity,
   AlertTriangle,
@@ -1092,6 +1093,31 @@ function ScoutPage({ data }: { data: Dataset }) {
   const source = data.scouting;
   const [view, setView] = useState<ScoutView>('dashboard');
   const [search, setSearch] = useState('');
+  const [showPresentationOptions, setShowPresentationOptions] = useState(false);
+  const [presentationBusy, setPresentationBusy] = useState(false);
+  const [presentationError, setPresentationError] = useState('');
+  const [presentationMeta, setPresentationMeta] = useState<PresentationMeta>({
+    opponent: data.activeTeam || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '',
+    reportDate: new Date().toISOString().slice(0, 10),
+    week: '',
+    gameType: 'Regular season',
+    location: 'Unknown',
+    preparedBy: '',
+    notes: '',
+  });
+  const updatePresentationMeta = (key: keyof PresentationMeta, value: string) => setPresentationMeta(current => ({ ...current, [key]: value }));
+  const generatePresentation = async () => {
+    setPresentationBusy(true);
+    setPresentationError('');
+    try {
+      await downloadScoutingPresentation(source, { ...presentationMeta, opponent: presentationMeta.opponent.trim() || data.activeTeam || 'Opponent' });
+      setShowPresentationOptions(false);
+    } catch (error) {
+      setPresentationError(error instanceof Error ? error.message : 'Could not generate the scouting presentation.');
+    } finally {
+      setPresentationBusy(false);
+    }
+  };
 
   // DASHBOARD yellow-cell filters (Apps Script rows 3-7, columns B / E / H / K).
   const [fOdk, setFOdk] = useState(SCOUT_ALL);
@@ -1287,8 +1313,27 @@ function ScoutPage({ data }: { data: Dataset }) {
       eyebrow="Scouting · tendency board"
       title="Find the tell."
       description="Every report from the Kangaroos scouting workbook, driven live off the current chart. Success is 4+ yards on 1st, half the sticks on 2nd, and a conversion on 3rd or 4th."
-      actions={<Link href="/reports" className="btn btn-primary" data-testid="link-scout-reports"><ClipboardList /> Build report</Link>}
+      actions={<><button className="btn btn-primary" onClick={() => { setPresentationMeta(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '' })); setShowPresentationOptions(true); setPresentationError(''); }} data-testid="button-scout-presentation"><Download /> Generate PDF + PowerPoint</button><Link href="/reports" className="btn btn-ghost" data-testid="link-scout-reports"><ClipboardList /> Build report</Link></>}
     />
+
+    {showPresentationOptions && <Panel>
+      <SectionTitle title="Generate scouting presentation" detail={`Full scouting chart for ${data.activeTeam || presentationMeta.opponent || 'selected team'} only — no Live Game plays`} link={<button className="btn btn-ghost" onClick={() => setShowPresentationOptions(false)} disabled={presentationBusy}><X size={15} /> Cancel</button>} />
+      <div className="form-grid">
+        <div className="field"><label htmlFor="presentation-opponent">Opponent</label><input id="presentation-opponent" className="input" value={presentationMeta.opponent} onChange={event => updatePresentationMeta('opponent', event.target.value)} /></div>
+        <div className="field"><label htmlFor="presentation-date">Report date</label><input id="presentation-date" type="date" className="input" value={presentationMeta.reportDate} onChange={event => updatePresentationMeta('reportDate', event.target.value)} /></div>
+        <div className="field"><label htmlFor="presentation-week">Week / game number</label><input id="presentation-week" className="input" value={presentationMeta.week} onChange={event => updatePresentationMeta('week', event.target.value)} placeholder="Week 8" /></div>
+        <div className="field"><label htmlFor="presentation-type">Game type</label><select id="presentation-type" className="input" value={presentationMeta.gameType} onChange={event => updatePresentationMeta('gameType', event.target.value)}><option>Regular season</option><option>District</option><option>Playoff</option><option>Scrimmage</option><option>Other</option></select></div>
+        <div className="field"><label htmlFor="presentation-location">Location</label><select id="presentation-location" className="input" value={presentationMeta.location} onChange={event => updatePresentationMeta('location', event.target.value)}><option>Unknown</option><option>Home</option><option>Away</option><option>Neutral</option></select></div>
+        <div className="field"><label htmlFor="presentation-prepared-by">Prepared by</label><input id="presentation-prepared-by" className="input" value={presentationMeta.preparedBy} onChange={event => updatePresentationMeta('preparedBy', event.target.value)} placeholder="Coach name" /></div>
+        <div className="field" style={{ gridColumn: '1 / -1' }}><label htmlFor="presentation-notes">Key defensive notes / staff emphasis</label><textarea id="presentation-notes" className="input" rows={3} value={presentationMeta.notes} onChange={event => updatePresentationMeta('notes', event.target.value)} placeholder="Add notes for the scouting verdict slide..." /></div>
+      </div>
+      <div className="actions" style={{ marginTop: 14, alignItems: 'center' }}>
+        <button className="btn btn-primary" onClick={generatePresentation} disabled={presentationBusy || !source.length} data-testid="button-generate-scout-presentation"><Download /> {presentationBusy ? 'Building files…' : 'Download PDF + editable PowerPoint'}</button>
+        <span className="eyebrow">{source.length} scouting plays · 15+ run / 20+ pass explosive thresholds</span>
+      </div>
+      {presentationError && <div className="callout" role="alert" style={{ marginTop: 12, color: '#b42318' }}><CircleAlert size={16} /><span>{presentationError}</span></div>}
+      <p className="field-hint" style={{ marginTop: 10 }}>The report is built from this selected team’s scouting chart only. Tables split across pages/slides, long cells shrink to fit, and layout checks stop content from crossing slide or footer boundaries.</p>
+    </Panel>}
 
     <div className="filters report-tabs">
       {SCOUT_VIEWS.map(item => {
