@@ -1774,6 +1774,16 @@ function ReportsHubPage({ data }: { data: Dataset }) {
   const dLivePctRun = defenseLive.length ? (dLiveRuns / defenseLive.length) * 100 : 0;
   const dLivePctPass = defenseLive.length ? (dLivePasses / defenseLive.length) * 100 : 0;
 
+  const yardageSummary = (plays: Play[], predicate: (play: Play) => boolean) => {
+    const relevantPlays = plays.filter(predicate);
+    const total = relevantPlays.reduce((sum, play) => sum + num(play.gnls), 0);
+    return { total, average: relevantPlays.length ? total / relevantPlays.length : 0 };
+  };
+  const dScoutRushYards = yardageSummary(defenseScout, isRun);
+  const dLiveRushYards = yardageSummary(defenseLive, isRun);
+  const dScoutPassYards = yardageSummary(defenseScout, isPass);
+  const dLivePassYards = yardageSummary(defenseLive, isPass);
+
   const dFormations = Array.from(new Set([...defenseScout.map(p => p.form), ...defenseLive.map(p => p.form)])).filter(Boolean).map(form => {
     const scoutF = defenseScout.filter(p => p.form === form);
     const liveF = defenseLive.filter(p => p.form === form);
@@ -1856,6 +1866,15 @@ function ReportsHubPage({ data }: { data: Dataset }) {
           </table></div>
         </Panel>
       </div>
+
+      <Panel><SectionTitle title="YARDAGE ALLOWED" detail="Scout baseline vs live game · average per run/pass play" />
+        <div className="table-wrap"><table className="data-table"><thead><tr><th>Category</th><th>Scout Total</th><th>Scout Avg</th><th>Live Total</th><th>Live Avg</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Rushing yards</strong></td><td>{dScoutRushYards.total.toFixed(1)}</td><td>{dScoutRushYards.average.toFixed(1)}</td><td>{dLiveRushYards.total.toFixed(1)}</td><td>{dLiveRushYards.average.toFixed(1)}</td></tr>
+            <tr><td><strong>Passing yards</strong></td><td>{dScoutPassYards.total.toFixed(1)}</td><td>{dScoutPassYards.average.toFixed(1)}</td><td>{dLivePassYards.total.toFixed(1)}</td><td>{dLivePassYards.average.toFixed(1)}</td></tr>
+          </tbody>
+        </table></div>
+      </Panel>
 
       <Panel><SectionTitle title="DOWN/DISTANCE" detail="Situational shifts" />
         <div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Live R/P</th><th>Scout R/P</th><th>Expected (Scout)</th></tr></thead>
