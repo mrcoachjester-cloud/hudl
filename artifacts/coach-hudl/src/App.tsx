@@ -1980,10 +1980,15 @@ function Router() {
           archived: game.archived,
         }));
 
+        // Keep the game already selected in this browser when it still exists in
+        // Supabase. Resetting to the first non-archived game on every load can
+        // make Live Game appear to lose plays or switch to another opponent.
         const activeGameId =
-          schedule.find(game => !game.archived)?.id ??
-          schedule[0]?.id ??
-          '';
+          schedule.some(game => game.id === data.activeGameId)
+            ? data.activeGameId
+            : schedule.find(game => !game.archived)?.id ??
+              schedule[0]?.id ??
+              '';
 
         let livePlays: Play[] = [];
         let scoutingPlays: Play[] = [];
