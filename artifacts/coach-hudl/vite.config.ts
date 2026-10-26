@@ -33,7 +33,7 @@ export default defineConfig(async ({ command }) => {
         name: 'restore-scout-helpers',
         enforce: 'pre' as const,
         transform(code: string, id: string) {
-          if (!id.endsWith('/src/App.tsx') || code.includes('function optionsFor(')) return null;
+          if (!id.endsWith('/src/App.tsx') || code.includes("import ScoutDashboard from './ScoutDashboard';") || code.includes('function optionsFor(')) return null;
           const marker = 'function ScoutPage(';
           if (!code.includes(marker)) return null;
           return { code: code.replace(marker, `${scoutHelpers}\n\n${marker}`), map: null };
