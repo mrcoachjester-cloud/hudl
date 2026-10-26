@@ -1104,7 +1104,7 @@ function ScoutPage({ data }: { data: Dataset }) {
   const [reportError, setReportError] = useState('');
   const [reportFields, setReportFields] = useState<Record<string, string>>({
     opponent: data.activeTeam || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '',
-    reportDate: new Date().toISOString().slice(0, 10),
+    reportDate: data.schedule.find(game => game.id === data.activeGameId)?.date || new Date().toISOString().slice(0, 10),
     week: '',
     location: data.schedule.find(game => game.id === data.activeGameId)?.location || 'Unknown',
     preparedBy: '',
