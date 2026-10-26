@@ -2,13 +2,13 @@ import type { StandardPlay } from './footballData';
 
 export type PresentationMeta = { opponent: string; reportDate: string; week: string; gameType: string; location: string; preparedBy: string; notes: string };
 type Any = Record<string, any>;
-declare global { interface Window { jspdf?: { jsPDF: new (options?: Any) => Any }; pptxgen?: new () => Any } }
+declare global { interface Window { jspdf?: { jsPDF: new (options?: Any) => Any }; PptxGenJS?: new () => Any } }
 
 function loadScript(src: string, name: 'jspdf' | 'PptxGenJS'): Promise<void> {
-  if (name === 'jspdf' && window.jspdf?.jsPDF || name === 'PptxGenJS' && window.pptxgen) return Promise.resolve();
+  if (name === 'jspdf' && window.jspdf?.jsPDF || name === 'PptxGenJS' && window.PptxGenJS) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const script = document.createElement('script'); script.src = src; script.async = true;
-    script.onload = () => (name === 'jspdf' ? !!window.jspdf?.jsPDF : !!window.pptxgen) ? resolve() : reject(new Error('Presentation library did not initialize.'));
+    script.onload = () => (name === 'jspdf' ? !!window.jspdf?.jsPDF : !!window.PptxGenJS) ? resolve() : reject(new Error('Presentation library did not initialize.'));
     script.onerror = () => reject(new Error('Could not load presentation exporter. Check internet access and try again.'));
     document.head.appendChild(script);
   });
@@ -41,7 +41,7 @@ export async function downloadScoutingPresentation(plays: StandardPlay[], meta: 
   if (!plays.length) throw new Error('There are no scouting plays for the selected team to include.');
   await Promise.all([
     loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js', 'jspdf'),
-    loadScript('https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js', 'PptxGenJS'),
+    loadScript('https://cdn.jsdelivr.net/gh/gitbrent/pptxgenjs/dist/pptxgen.bundle.js', 'PptxGenJS'),
   ]);
   const r = reportData(plays, meta), base = `Coach-Hudl-${safeName(meta.opponent)}-${meta.reportDate || new Date().toISOString().slice(0, 10)}`;
   makePdf(r, base); await makePptx(r, base);
@@ -68,7 +68,7 @@ function makePdf(r: ReturnType<typeof reportData>, base: string) {
   doc.save(`${base}.pdf`);
 }
 async function makePptx(r: ReturnType<typeof reportData>, base: string) {
-  const pptx = new (window.pptxgen!)(); pptx.layout='LAYOUT_WIDE';pptx.author=r.meta.preparedBy||'Coach Hudl';pptx.subject=`Scouting report: ${r.meta.opponent}`;pptx.title=`Coach Hudl Scouting Presentation — ${r.meta.opponent}`;
+  const pptx = new (window.PptxGenJS!)(); pptx.layout='LAYOUT_WIDE';pptx.author=r.meta.preparedBy||'Coach Hudl';pptx.subject=`Scouting report: ${r.meta.opponent}`;pptx.title=`Coach Hudl Scouting Presentation — ${r.meta.opponent}`;
   const W=13.333,H=7.5,m=.55,navy='201242',purple='4A287F',light='F5F3F8',ink='282536';
   const addText=(s: Any,t: unknown,x:number,y:number,w:number,h:number,opts:Any={})=>{if(x<0||y<0||x+w>W+.01||y+h>H+.01)throw new Error('PowerPoint layout safety check failed: content exceeds slide bounds.');s.addText(String(t??'—'),{x,y,w,h,fontFace:'Aptos',fontSize:Math.min(opts.fontSize??10,Math.max(7,Math.floor(h*15))),color:ink,margin:.04,breakLine:false,valign:'mid',fit:'shrink',...opts});};
   const slide=(title:string)=>{const s=pptx.addSlide();s.background={color:'FFFFFF'};s.addShape(pptx.ShapeType.rect,{x:0,y:0,w:W,h:.78,fill:{color:navy},line:{color:navy}});addText(s,title,m,.12,W-2*m,.34,{fontSize:20,bold:true,color:'FFFFFF',margin:0});addText(s,`${r.meta.opponent} · ${r.meta.reportDate} · ${r.stats.total} scouting plays`,m,7.18,W-2*m,.15,{fontSize:7,color:'666174',margin:0});addText(s,String(pptx._slides.length),W-.7,7.18,.2,.15,{fontSize:7,color:'666174',align:'right',margin:0});return s;};
