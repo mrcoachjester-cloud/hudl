@@ -5,6 +5,7 @@ import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
 import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
 import { downloadScoutingPresentation, type PresentationMeta } from './lib/scoutingPresentation';
+import { downloadWeeklyScoutingReport } from './lib/weeklyScoutingReport';
 import {
   Activity,
   AlertTriangle,
@@ -1096,6 +1097,53 @@ function ScoutPage({ data }: { data: Dataset }) {
   const [showPresentationOptions, setShowPresentationOptions] = useState(false);
   const [presentationBusy, setPresentationBusy] = useState(false);
   const [presentationError, setPresentationError] = useState('');
+  const [showReportBuilder, setShowReportBuilder] = useState(false);
+  const [reportType, setReportType] = useState<'offense' | 'defense'>('defense');
+  const [reportStep, setReportStep] = useState(0);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [reportFields, setReportFields] = useState<Record<string, string>>({
+    opponent: data.activeTeam || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '',
+    reportDate: new Date().toISOString().slice(0, 10),
+    week: '',
+    location: data.schedule.find(game => game.id === data.activeGameId)?.location || 'Unknown',
+    preparedBy: '',
+    team: data.activeTeam || '',
+  });
+  const updateReportField = (key: string, value: string) => setReportFields(current => ({ ...current, [key]: value }));
+  const reportPages = reportType === 'defense' ? [
+    { title: 'Opponent Overview', fields: [['Team overview', 'opponentOverview'], ['Coaching staff / scheme notes', 'staffNotes'], ['Key players to watch', 'keyPlayers']] },
+    { title: 'Offensive Identity & Tendencies', fields: [['Offensive scheme and identity', 'scheme'], ['Personnel / formations', 'personnel'], ['Run game / pass game notes', 'runPassNotes'], ['Motion / backfield tells', 'motionNotes']] },
+    { title: 'Formation Breakdown & Adjustments', fields: [['Formation-specific adjustments', 'formationAdjustments'], ['Down and distance plan', 'downDistancePlan'], ['Field position / hash notes', 'fieldPositionNotes']] },
+    { title: 'Defensive Plan', fields: [['Fronts, coverages, and pressures', 'defensivePlan'], ['Key assignments / matchups', 'matchups'], ['Keys to success', 'keysToSuccess'], ['Weekly emphasis / team message', 'weeklyMessage']] },
+  ] as Array<{ title: string; fields: Array<[string, string]> }> : [
+    { title: 'Opponent Overview', fields: [['Team overview', 'opponentOverview'], ['Coaching staff / defensive scheme notes', 'staffNotes'], ['Key players to watch', 'keyPlayers']] },
+    { title: 'Defensive Identity & Tendencies', fields: [['Defensive fronts and structures', 'scheme'], ['Coverage / pressure tendencies', 'coveragePressure'], ['Personnel / formation notes', 'personnel'], ['Down and distance tendencies', 'downDistancePlan']] },
+    { title: 'Offensive Plan & Adjustments', fields: [['Formation-specific offensive answers', 'formationAdjustments'], ['Run / pass plan', 'runPassNotes'], ['Protection / matchup notes', 'matchups']] },
+    { title: 'Weekly Offensive Focus', fields: [['Keys to success', 'keysToSuccess'], ['Situational priorities', 'fieldPositionNotes'], ['Weekly emphasis / team message', 'weeklyMessage']] },
+  ] as Array<{ title: string; fields: Array<[string, string]> }>;
+  const reportPageCount = reportPages.length + 2;
+  const createWeeklyReport = async () => {
+    setReportBusy(true);
+    setReportError('');
+    try {
+      await downloadWeeklyScoutingReport(source, reportType, {
+        opponent: reportFields.opponent || data.activeTeam || 'Opponent',
+        reportDate: reportFields.reportDate || '',
+        week: reportFields.week || '',
+        location: reportFields.location || '',
+        preparedBy: reportFields.preparedBy || '',
+        team: reportFields.team || data.activeTeam || '',
+      }, reportFields);
+      setShowReportBuilder(false);
+      setReportStep(0);
+    } catch (error) {
+      setReportError(error instanceof Error ? error.message : 'Could not create the weekly scouting document.');
+    } finally {
+      setReportBusy(false);
+    }
+  };
+
   const [presentationMeta, setPresentationMeta] = useState<PresentationMeta>({
     opponent: data.activeTeam || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '',
     reportDate: new Date().toISOString().slice(0, 10),
