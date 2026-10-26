@@ -265,14 +265,14 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       setData({
         ...data,
         activeTeam: normalizedTeam,
-        activeGameId: teamGame?.id ?? '',
+        activeGameId: teamGame?.id ?? data.activeGameId,
         scouting,
         live,
       });
     } catch (error) {
       console.error('Could not load team scouting data:', error);
       const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? '', live });
+      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
     }
   };
 
@@ -316,7 +316,6 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     setData({
       ...data,
       activeGameId: gameId,
-      activeTeam: data.schedule.find(game => game.id === gameId)?.opponent ?? data.activeTeam,
       scouting: targetPlays.scouting,
       live: targetPlays.live,
       gameData: {
