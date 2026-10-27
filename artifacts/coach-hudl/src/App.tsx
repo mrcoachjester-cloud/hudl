@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, createGame, createLivePlay, createScoutingSession, deleteLivePlayByNumber, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, updateLivePlayByNumber, type StandardPlay } from './lib/footballData';
 import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
@@ -1647,17 +1647,27 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
 
   const resultOptions = ['Complete', 'Complete TD', 'Fumble', 'Good', 'Incomplete', 'Interception', 'No Good', 'Penalty', 'Return', 'Rush', 'Rush TD', 'Sack', 'Scramble', '2 Pt', 'Extra Pt', 'Punt', 'FG', 'Onside Kick', 'Pass'];
 
-  const addPlay = () => {
+  const addPlay = async () => {
     if (!form.yardLn.trim()) { toast.notify('Enter the end yard line after the snap'); return; }
     if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
     if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
-    
-    const next = { ...data, live: [...live, { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(live.length + 1).padStart(2, '0') }] };
-    setData(next);
-    
-    // reset form for next play
-    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), startYardLn: normalizedFormYardLine, yardLn: '', gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
-    toast.notify(`Live snap added · GN/LS ${formatGnls(calculatedGnls)}`);
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before saving Live Game snaps.');
+      return;
+    }
+
+    const nextPlay = { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(Math.max(0, ...live.map(play => Number(play.playNo) || 0)) + 1).padStart(2, '0') };
+    try {
+      const saved = await createLivePlay(data.activeGameId, nextPlay);
+      if (!saved) throw new Error('Supabase did not confirm that the snap was saved.');
+      const next = { ...data, live: [...live, nextPlay] };
+      setData(next);
+      setForm(current => ({ ...current, playNo: String(Number(nextPlay.playNo) + 1).padStart(2, '0'), startYardLn: normalizedFormYardLine, yardLn: '', gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
+      toast.notify(`Saved to Supabase · live snap #${nextPlay.playNo}`);
+    } catch (error) {
+      console.error('Could not save Live Game snap to Supabase:', error);
+      toast.notify(`Live snap was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
   };
 
   const exportLiveHudlCsv = () => {
@@ -1674,11 +1684,37 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
 
   const importLive = (file?: File) => {
     if (!file) return;
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before importing Live Game CSV.');
+      fileRef.current && (fileRef.current.value = '');
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const parsed = deriveLiveGains(parseCsv(String(reader.result ?? '')), previousYardLine);
-      setData({ ...data, live: [...live, ...parsed] });
-      toast.notify(`${parsed.length} live snaps imported with yard-line gains`);
+      const firstNumber = Math.max(0, ...live.map(play => Number(play.playNo) || 0));
+      const numbered = parsed.map((play, index) => ({ ...play, playNo: String(firstNumber + index + 1).padStart(2, '0') }));
+      try {
+        for (const play of numbered) {
+          const saved = await createLivePlay(data.activeGameId, play);
+          if (!saved) throw new Error(`Supabase did not confirm snap #${play.playNo}.`);
+        }
+        const remote = await getLivePlays(data.activeGameId);
+        const savedPlays = remote.map(livePlayToStandard);
+        setData({ ...data, live: savedPlays });
+        toast.notify(`Saved ${savedPlays.length - live.length} imported snaps to Supabase.`);
+      } catch (error) {
+        console.error('Live Game CSV import failed to save to Supabase:', error);
+        try {
+          const remote = await getLivePlays(data.activeGameId);
+          setData({ ...data, live: remote.map(livePlayToStandard) });
+        } catch (reloadError) {
+          console.error('Could not reload Live Game after import failure:', reloadError);
+        }
+        toast.notify(`Live CSV import stopped: ${error instanceof Error ? error.message : 'unknown error'}. Saved rows were reloaded from Supabase.`);
+      } finally {
+        if (fileRef.current) fileRef.current.value = '';
+      }
     };
     reader.readAsText(file);
   };
@@ -1686,13 +1722,38 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {
     const actualIndex = live.length - 1 - displayIndex;
     const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);
-    setData({ ...data, live: recalculateLiveGains(nextLive, '-20') }); // recalculated from start
+    setData({ ...data, live: recalculateLiveGains(nextLive, '-20') });
   };
 
-  const removeLiveRow = (displayIndex: number) => {
+  const saveLiveRow = async (displayIndex: number) => {
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) return;
     const actualIndex = live.length - 1 - displayIndex;
-    setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
-    toast.notify('Live snap removed');
+    const play = live[actualIndex];
+    if (!play) return;
+    try {
+      await updateLivePlayByNumber(data.activeGameId, Number(play.playNo), play);
+    } catch (error) {
+      console.error('Could not save edited Live Game snap to Supabase:', error);
+      toast.notify(`Edit was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  };
+
+  const removeLiveRow = async (displayIndex: number) => {
+    const actualIndex = live.length - 1 - displayIndex;
+    const play = live[actualIndex];
+    if (!play) return;
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before deleting Live Game snaps.');
+      return;
+    }
+    try {
+      await deleteLivePlayByNumber(data.activeGameId, Number(play.playNo));
+      setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
+      toast.notify('Live snap deleted from Supabase');
+    } catch (error) {
+      console.error('Could not delete Live Game snap from Supabase:', error);
+      toast.notify(`Live snap was not deleted: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
   };
 
   const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;
@@ -1707,7 +1768,7 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   
   const endYardLineField = <div className="field"><label htmlFor="live-yardLn">End yard line</label><input id="live-yardLn" className="input" value={form.yardLn} onChange={event => update('yardLn', event.target.value)} onBlur={() => update('yardLn', normalizeYardLine(form.yardLn))} placeholder="-22 or 22" inputMode="numeric" data-testid="input-live-yardLn" /><span className="field-hint">Negative = own · positive = opponent</span></div>;
 
-  const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => (key === 'yardLn' || key === 'startYardLn') && updateLiveRow(displayIndex, key, normalizeYardLine(event.currentTarget.value))} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
+  const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => { updateLiveRow(displayIndex, key, event.target.value); void saveLiveRow(displayIndex); }} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => { if (key === 'yardLn' || key === 'startYardLn') updateLiveRow(displayIndex, key, normalizeYardLine(event.currentTarget.value)); void saveLiveRow(displayIndex); }} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
 
   return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button><button className="btn btn-primary" onClick={exportLiveHudlCsv} data-testid="button-export-live-hudl"><Download /> Hudl CSV — Live Game</button></>} />
     <Panel><SectionTitle title="Add a live snap" detail="Choose O, D, or K. GN/LS calculates from start to end yard line." /><div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{startYardLineField}{endYardLineField}{editableField('form', 'Formation')}{editableField('offPlay', 'Play call')}{field('type', 'Play type', ['Run', 'Pass'])}{editableField('carrier', 'Ball carrier')}{field('result', 'Result', resultOptions)}{editableField('defense', 'Defense')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {actualStart}</span></div></div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
