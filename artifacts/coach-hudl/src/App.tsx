@@ -233,6 +233,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
   const [teamOptions, setTeamOptions] = useState<string[]>([]);
   const activeTeam = data.activeTeam ?? activeGame?.opponent ?? '';
+  // Ignore out-of-order team changes so an older Supabase response cannot overwrite the latest selection.
+  const teamSelectionRequest = useRef(0);
 
   const seasons = Array.from(new Set(data.schedule.map(game => game.season)))
     .sort((a, b) => Number(b) - Number(a));
@@ -259,6 +261,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   const selectTeam = async (team: string) => {
     const normalizedTeam = team.trim();
     if (!normalizedTeam || normalizedTeam === activeTeam) return;
+    const requestId = ++teamSelectionRequest.current;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
     let scouting: Play[] = [];
     try {
@@ -279,6 +282,9 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     } else if (teamGame && !isSupabaseConfigured) {
       live = data.gameData?.[teamGame.id]?.live ?? [];
     }
+
+    // A newer selection may have started while Supabase was loading. Only the most recent selection may update the app.
+    if (requestId !== teamSelectionRequest.current) return;
 
     setData({
       ...data,
