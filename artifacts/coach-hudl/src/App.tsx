@@ -260,9 +260,17 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
 
   const selectTeam = async (team: string) => {
     const normalizedTeam = team.trim();
-    if (!normalizedTeam || normalizedTeam === activeTeam) return;
-    const requestId = ++teamSelectionRequest.current;
+    if (!normalizedTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
+
+    // A team name can still match while the active game ID is blank or stale.
+    // Only skip the selection when both the team and its scheduled game are already active.
+    if (
+      normalizedTeam.toLowerCase() === activeTeam.trim().toLowerCase() &&
+      (teamGame?.id ?? '') === data.activeGameId
+    ) return;
+
+    const requestId = ++teamSelectionRequest.current;
 
     // Commit the selection immediately. Otherwise the UI can still hold the previous
     // game's ID while the scouting/live requests are in flight, making CSV import
