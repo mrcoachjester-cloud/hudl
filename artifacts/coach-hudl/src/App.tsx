@@ -557,22 +557,16 @@ function Kpi({ label, value, note, green = false }: { label: string; value: stri
 
 function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset) => void }) {
   const [phaseFilter, setPhaseFilter] = useState<'all' | 'O' | 'D' | 'K'>('all');
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'scouting' | 'live'>('all');
 
-  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
+  const activeGame = data.schedule.find(game => game.id === data.activeGameId);
+  const activeOpponent = data.activeTeam?.trim() || activeGame?.opponent || 'Opponent';
+  // Overview is an opponent scouting report only. Never include Live Game rows here.
   const scoutingPlays = data.scouting;
-  const livePlays = data.live;
-
-  const basePlays = useMemo(() => {
-    if (sourceFilter === 'scouting') return scoutingPlays;
-    if (sourceFilter === 'live') return livePlays;
-    return [...scoutingPlays, ...livePlays];
-  }, [sourceFilter, scoutingPlays, livePlays]);
 
   const plays = useMemo(() => {
-    if (phaseFilter === 'all') return basePlays;
-    return basePlays.filter(play => normalizeOdk(play.odk) === phaseFilter);
-  }, [basePlays, phaseFilter]);
+    if (phaseFilter === 'all') return scoutingPlays;
+    return scoutingPlays.filter(play => normalizeOdk(play.odk) === phaseFilter);
+  }, [scoutingPlays, phaseFilter]);
 
   // Core Football Efficiency Calculations
   const runs = plays.filter(play => play.type.toLowerCase().includes('run'));
@@ -723,11 +717,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
     });
   }
 
-  // Live vs Scouting Comparison Shift
-  const hasLive = livePlays.length > 0;
-  const scoutRunPct = scoutingPlays.length ? Math.round((scoutingPlays.filter(p => p.type.toLowerCase().includes('run')).length / scoutingPlays.length) * 100) : 0;
-  const liveRunPct = livePlays.length ? Math.round((livePlays.filter(p => p.type.toLowerCase().includes('run')).length / livePlays.length) * 100) : 0;
-  const runShift = liveRunPct - scoutRunPct;
 
   const loadDemoScout = () => {
     if (setData) {
@@ -738,9 +727,9 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
   return (
     <div className="content">
       <PageHead
-        eyebrow={`Opponent intelligence · ${activeGame ? `${activeGame.season} · ${activeGame.location === 'Home' ? 'vs' : '@'} ${activeGame.opponent}` : 'Active Game'}`}
+        eyebrow={`Opponent intelligence · ${activeGame ? `${activeGame.season} · ${activeGame.location === 'Home' ? 'vs' : '@'} ${activeOpponent}` : activeOpponent}`}
         title="Your film room, sharper."
-        description={`${activeGame ? activeGame.opponent : 'Opponent'} is queued up with ${plays.length} charted snaps in active view (${scoutingPlays.length} scout, ${livePlays.length} live).`}
+        description={`${activeOpponent} scouting report · ${scoutingPlays.length} uploaded scouting snaps. Live Game data is excluded from Overview.`}
         actions={
           <>
             <Link href="/upload" className="btn btn-ghost" data-testid="link-dashboard-upload">
@@ -785,21 +774,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
           </button>
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="eyebrow" style={{ margin: 0 }}>
-            Source:
-          </span>
-          <select
-            value={sourceFilter}
-            onChange={e => setSourceFilter(e.target.value as 'all' | 'scouting' | 'live')}
-            style={{ padding: '4px 8px', fontSize: 11, borderRadius: 6 }}
-            data-testid="select-source-filter"
-          >
-            <option value="all">Combined ({scoutingPlays.length + livePlays.length})</option>
-            <option value="scouting">Scouting only ({scoutingPlays.length})</option>
-            <option value="live">Live game only ({livePlays.length})</option>
-          </select>
-        </div>
+
       </div>
 
       {/* KPI Suite */}
@@ -809,28 +784,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         <Kpi label="Success rate" value={`${successRate}%`} note={`${successCount} situational wins`} green={successRate >= 50} />
         <Kpi label="Explosive plays" value={String(explosives.length).padStart(2, '0')} note={`${plays.length ? Math.round((explosives.length / plays.length) * 100) : 0}% of charted snaps`} />
       </div>
-
-      {/* Live Shift Alert Banner */}
-      {hasLive && (
-        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(31, 201, 139, 0.06)', borderColor: 'rgba(31, 201, 139, 0.28)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(31, 201, 139, 0.18)', color: '#62dfae' }}>
-                <Activity size={18} />
-              </div>
-              <div>
-                <strong style={{ fontSize: 14, color: '#fff' }}>Game-Day Shift Detected</strong>
-                <p style={{ margin: '2px 0 0', fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>
-                  Live game is trending {runShift > 5 ? `+${runShift}% more run-heavy` : runShift < -5 ? `+${Math.abs(runShift)}% more pass-heavy` : 'consistent with'} the scouting report ({liveRunPct}% Run live vs {scoutRunPct}% Run scout).
-                </p>
-              </div>
-            </div>
-            <Link href="/live" className="btn btn-green" style={{ padding: '6px 12px', fontSize: 11 }} data-testid="link-banner-live">
-              View live sideline
-            </Link>
-          </div>
-        </Panel>
-      )}
 
       {/* Main Analysis Grid */}
       <div className="grid dashboard-grid">
@@ -954,7 +907,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
           <div style={{ padding: '21px 21px 0' }}>
             <SectionTitle
               title="Recent charted plays"
-              detail={`Latest snaps from ${sourceFilter === 'all' ? 'active board' : sourceFilter}`}
+              detail="Latest uploaded scouting snaps only"
               link={
                 <Link href="/scout" className="tiny-link" data-testid="link-dashboard-recent">
                   Full tape ledger
@@ -1012,7 +965,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
             <div className="empty">
               <Film size={28} />
               <h3>No charted plays for this game</h3>
-              <p>Import a CSV, chart live sideline snaps, or load demo scouting tape.</p>
+              <p>Upload this opponent’s scouting CSV in the Data Room to populate the scouting-only overview.</p>
               <button className="btn btn-primary" onClick={loadDemoScout} data-testid="button-overview-load-demo">
                 <Sparkles /> Load demo scouting data
               </button>
