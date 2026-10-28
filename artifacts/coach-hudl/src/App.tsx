@@ -263,15 +263,29 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     if (!normalizedTeam || normalizedTeam === activeTeam) return;
     const requestId = ++teamSelectionRequest.current;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
-    let scouting: Play[] = [];
-    try {
-      scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-    } catch (error) {
-      console.error('Could not load team scouting data:', error);
-    }
 
-    // Live Game is sourced only from the selected game's Supabase plays.
-    // Never reuse cached plays from a prior selection when the remote game is empty.
+    // Commit the selection immediately. Otherwise the UI can still hold the previous
+    // game's ID while the scouting/live requests are in flight, making CSV import
+    // intermittently target the wrong game or report that no game is selected.
+    const selectionData: Dataset = {
+      ...data,
+      activeTeam: normalizedTeam,
+      activeGameId: teamGame?.id ?? '',
+      scouting: [],
+      live: [],
+      gameData: {
+        ...(data.gameData || {}),
+        ...(teamGame ? { [teamGame.id]: { scouting: [], live: [] } } : {}),
+      },
+    };
+    setData(selectionData);
+
+    const scoutingPromise = getScoutingPlaysForTeam(activeSeason, normalizedTeam)
+      .catch(error => {
+        console.error('Could not load team scouting data:', error);
+        return [] as Play[];
+      });
+
     let live: Play[] = [];
     if (teamGame && isSupabaseConfigured) {
       try {
@@ -282,18 +296,17 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     } else if (teamGame && !isSupabaseConfigured) {
       live = data.gameData?.[teamGame.id]?.live ?? [];
     }
+    const scouting = await scoutingPromise;
 
     // A newer selection may have started while Supabase was loading. Only the most recent selection may update the app.
     if (requestId !== teamSelectionRequest.current) return;
 
     setData({
-      ...data,
-      activeTeam: normalizedTeam,
-      activeGameId: teamGame?.id ?? '',
+      ...selectionData,
       scouting,
       live,
       gameData: {
-        ...(data.gameData || {}),
+        ...(selectionData.gameData || {}),
         ...(teamGame ? { [teamGame.id]: { scouting, live } } : {}),
       },
     });
