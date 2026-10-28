@@ -2012,25 +2012,73 @@ function ReportsHubPage({ data }: { data: Dataset }) {
 }
 
 function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
-  const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });
+  const [draft, setDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '', location: 'Home', result: '—' });
   const [showArchived, setShowArchived] = useState(false);
+  const [savingGame, setSavingGame] = useState(false);
   const schedule = data.schedule;
   const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];
   const seasons = Array.from(new Set(schedule.map(game => game.season))).sort((a, b) => Number(b) - Number(a));
   const lastSeason = activeGame ? String(Number(activeGame.season) - 1) : seasons[1];
-  const addGame = () => {
-    if (!draft.season.trim() || !draft.opponent.trim()) return;
-    const id = `game-${Date.now()}-${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    const game: ScheduleGame = { ...draft, id, archived: false };
-    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });
-    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));
+  const addGame = async () => {
+    const seasonYear = draft.season.trim();
+    const opponent = draft.opponent.trim();
+    if (!seasonYear || !opponent || savingGame) return;
+    if (!isSupabaseConfigured) {
+      window.alert('Cannot save this game because Supabase is not configured in this deployment. No local-only game was created.');
+      return;
+    }
+
+    setSavingGame(true);
+    try {
+      const remoteSeasons = await getSeasons();
+      const remoteSeason = remoteSeasons.find(season => String(season.season_year) === seasonYear);
+      if (!remoteSeason) {
+        throw new Error(`Season ${seasonYear} does not exist in Supabase. Create/select a season in the database before adding games to it.`);
+      }
+
+      const created = await createGame({
+        seasonId: remoteSeason.id,
+        opponent,
+        gameDate: draft.date,
+        location: draft.location,
+        result: draft.result,
+      });
+      if (!created?.id || created.id.startsWith('game-')) {
+        throw new Error('Supabase did not return a valid saved game ID.');
+      }
+
+      const game: ScheduleGame = {
+        id: created.id,
+        season: String(remoteSeason.season_year),
+        opponent: created.opponent,
+        date: created.game_date ?? '',
+        location: created.location ?? '—',
+        result: created.game_result ?? '—',
+        archived: created.archived,
+      };
+      setData({
+        ...data,
+        schedule: [game, ...schedule.filter(item => item.id !== game.id)],
+        activeGameId: game.id,
+        activeTeam: game.opponent,
+        scouting: [],
+        live: [],
+        gameData: { ...(data.gameData || {}), [game.id]: { scouting: [], live: [] } },
+      });
+      setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));
+    } catch (error) {
+      console.error('Could not save scheduled game to Supabase:', error);
+      window.alert(`Game was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}. It was not added locally.`);
+    } finally {
+      setSavingGame(false);
+    }
   };
   const toggleArchive = (id: string) => setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived: !game.archived } : game) });
   const chooseGame = (id: string) => setData({ ...data, activeGameId: id });
   const visibleGames = schedule.filter(game => showArchived || !game.archived);
   const currentSeasonGames = schedule.filter(game => game.season === activeGame?.season);
   const lastSeasonGames = schedule.filter(game => game.season === lastSeason);
-  return <div className="content"><PageHead eyebrow="Schedule · seasons & opponents" title="Know who is next." description="Enter your schedule, choose the active game, archive old opponents, and keep last season available for comparison." /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .45fr)' }}><div className="grid"><Panel><SectionTitle title="Add to schedule" detail="Build the board you want to chart" /><div className="form-grid schedule-form"><div className="field"><label htmlFor="schedule-season">Season</label><input id="schedule-season" className="input" value={draft.season} onChange={event => setDraft({ ...draft, season: event.target.value })} placeholder="2025" data-testid="input-schedule-season" /></div><div className="field"><label htmlFor="schedule-opponent">Opponent</label><input id="schedule-opponent" className="input" value={draft.opponent} onChange={event => setDraft({ ...draft, opponent: event.target.value })} placeholder="Opponent name" data-testid="input-schedule-opponent" /></div><div className="field"><label htmlFor="schedule-date">Date</label><input id="schedule-date" className="input" type="date" value={draft.date} onChange={event => setDraft({ ...draft, date: event.target.value })} data-testid="input-schedule-date" /></div><div className="field"><label htmlFor="schedule-location">Location</label><select id="schedule-location" value={draft.location} onChange={event => setDraft({ ...draft, location: event.target.value })} data-testid="select-schedule-location"><option>Home</option><option>Away</option><option>Neutral</option></select></div></div><button className="btn btn-primary" onClick={addGame} disabled={!draft.season.trim() || !draft.opponent.trim()} data-testid="button-add-schedule-game"><Plus /> Add game</button></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={`${activeGame?.season ?? 'Season'} schedule`} detail="Choose a game to make it active" link={<button className="btn btn-ghost" onClick={() => setShowArchived(value => !value)} data-testid="button-toggle-archived">{showArchived ? 'Hide archived' : 'Show archived'}</button>} /></div><div className="schedule-list">{visibleGames.map(game => <div className={`schedule-row ${game.id === data.activeGameId ? 'selected-schedule' : ''}`} key={game.id}><button className="schedule-select" onClick={() => chooseGame(game.id)} data-testid={`button-choose-game-${game.id}`}><span className="schedule-date">{game.date || 'Date TBD'}</span><strong>{game.opponent}</strong><span>{game.season} · {game.location} · {game.result}</span></button><button className={`btn ${game.archived ? 'btn-ghost' : 'btn-danger'}`} onClick={() => toggleArchive(game.id)} data-testid={`button-archive-game-${game.id}`}>{game.archived ? 'Restore' : 'Archive'}</button></div>)}</div></Panel></div><div className="grid"><Panel><SectionTitle title="Active game" detail="Current charting context" />{activeGame ? <><div className="kpi-value" style={{ fontSize: 27 }}>{activeGame.opponent}</div><p className="kpi-note">{activeGame.season} · {activeGame.date || 'Date TBD'} · {activeGame.location}</p><div className="callout" style={{ marginTop: 16 }}><Target />Live and scouting boards are ready for the selected game.</div></> : <div className="empty"><FileSpreadsheet size={28} /><h3>No active game</h3><p>Add a schedule entry to begin.</p></div>}</Panel><Panel><SectionTitle title="Last season comparison" detail={`${lastSeason} schedule`} /><div className="compare-stat"><span>{activeGame?.season ?? 'Current'} games</span><b>{currentSeasonGames.length}</b></div><div className="compare-stat"><span>{lastSeason} games</span><b>{lastSeasonGames.length}</b></div><div className="feed" style={{ marginTop: 12 }}>{lastSeasonGames.length ? lastSeasonGames.slice(0, 4).map(game => <div className="feed-row" key={game.id}><span className="feed-num">{game.season}</span><div className="feed-main"><strong>{game.opponent}</strong><span>{game.date || 'Date TBD'} · {game.result}</span></div></div>) : <div className="eyebrow">Add last season opponents to compare them here.</div>}</div></Panel></div></div></div>;
+  return <div className="content"><PageHead eyebrow="Schedule · seasons & opponents" title="Know who is next." description="Enter your schedule, choose the active game, archive old opponents, and keep last season available for comparison." /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .45fr)' }}><div className="grid"><Panel><SectionTitle title="Add to schedule" detail="Build the board you want to chart" /><div className="form-grid schedule-form"><div className="field"><label htmlFor="schedule-season">Season</label><input id="schedule-season" className="input" value={draft.season} onChange={event => setDraft({ ...draft, season: event.target.value })} placeholder="2025" data-testid="input-schedule-season" /></div><div className="field"><label htmlFor="schedule-opponent">Opponent</label><input id="schedule-opponent" className="input" value={draft.opponent} onChange={event => setDraft({ ...draft, opponent: event.target.value })} placeholder="Opponent name" data-testid="input-schedule-opponent" /></div><div className="field"><label htmlFor="schedule-date">Date</label><input id="schedule-date" className="input" type="date" value={draft.date} onChange={event => setDraft({ ...draft, date: event.target.value })} data-testid="input-schedule-date" /></div><div className="field"><label htmlFor="schedule-location">Location</label><select id="schedule-location" value={draft.location} onChange={event => setDraft({ ...draft, location: event.target.value })} data-testid="select-schedule-location"><option>Home</option><option>Away</option><option>Neutral</option></select></div></div><button className="btn btn-primary" onClick={addGame} disabled={!draft.season.trim() || !draft.opponent.trim() || savingGame} data-testid="button-add-schedule-game"><Plus /> {savingGame ? "Saving…" : "Add game"}</button></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={`${activeGame?.season ?? 'Season'} schedule`} detail="Choose a game to make it active" link={<button className="btn btn-ghost" onClick={() => setShowArchived(value => !value)} data-testid="button-toggle-archived">{showArchived ? 'Hide archived' : 'Show archived'}</button>} /></div><div className="schedule-list">{visibleGames.map(game => <div className={`schedule-row ${game.id === data.activeGameId ? 'selected-schedule' : ''}`} key={game.id}><button className="schedule-select" onClick={() => chooseGame(game.id)} data-testid={`button-choose-game-${game.id}`}><span className="schedule-date">{game.date || 'Date TBD'}</span><strong>{game.opponent}</strong><span>{game.season} · {game.location} · {game.result}</span></button><button className={`btn ${game.archived ? 'btn-ghost' : 'btn-danger'}`} onClick={() => toggleArchive(game.id)} data-testid={`button-archive-game-${game.id}`}>{game.archived ? 'Restore' : 'Archive'}</button></div>)}</div></Panel></div><div className="grid"><Panel><SectionTitle title="Active game" detail="Current charting context" />{activeGame ? <><div className="kpi-value" style={{ fontSize: 27 }}>{activeGame.opponent}</div><p className="kpi-note">{activeGame.season} · {activeGame.date || 'Date TBD'} · {activeGame.location}</p><div className="callout" style={{ marginTop: 16 }}><Target />Live and scouting boards are ready for the selected game.</div></> : <div className="empty"><FileSpreadsheet size={28} /><h3>No active game</h3><p>Add a schedule entry to begin.</p></div>}</Panel><Panel><SectionTitle title="Last season comparison" detail={`${lastSeason} schedule`} /><div className="compare-stat"><span>{activeGame?.season ?? 'Current'} games</span><b>{currentSeasonGames.length}</b></div><div className="compare-stat"><span>{lastSeason} games</span><b>{lastSeasonGames.length}</b></div><div className="feed" style={{ marginTop: 12 }}>{lastSeasonGames.length ? lastSeasonGames.slice(0, 4).map(game => <div className="feed-row" key={game.id}><span className="feed-num">{game.season}</span><div className="feed-main"><strong>{game.opponent}</strong><span>{game.date || 'Date TBD'} · {game.result}</span></div></div>) : <div className="eyebrow">Add last season opponents to compare them here.</div>}</div></Panel></div></div></div>;
 }
 
 function NotFoundPage() { return <div className="content"><PageHead eyebrow="404 · off the board" title="That page isn't charted." description="Use the workspace navigation to get back into the film room." actions={<Link href="/" className="btn btn-primary" data-testid="link-not-found-home"><LayoutDashboard /> Back to overview</Link>} /></div>; }
