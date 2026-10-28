@@ -562,6 +562,32 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
   const activeOpponent = data.activeTeam?.trim() || activeGame?.opponent || 'Opponent';
   // Overview is an opponent scouting report only. Never include Live Game rows here.
   const scoutingPlays = data.scouting;
+  // Team identity and down efficiency always use this opponent's offensive scouting snaps,
+  // independent of the visual phase filter below. Live Game rows are never included.
+  const opponentOffense = scoutingPlays.filter(play => normalizeOdk(play.odk) === 'O');
+  const identityResult = (play: Play) => (play.result || '').toLowerCase();
+  const teamIdentity = {
+    runAtt: opponentOffense.filter(play => play.type.toLowerCase().includes('run')).length,
+    runYds: opponentOffense.filter(play => play.type.toLowerCase().includes('run')).reduce((sum, play) => sum + num(play.gnls), 0),
+    passAtt: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).length,
+    passComp: opponentOffense.filter(play => {
+      const result = identityResult(play);
+      return /\\bcomplete(?:d)?\\b/.test(result) && !/incomplete/.test(result);
+    }).length,
+    passYds: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).reduce((sum, play) => sum + num(play.gnls), 0),
+    sacks: opponentOffense.filter(play => /\\bsack(?:ed)?\\b/.test(identityResult(play))).length,
+    tfl: opponentOffense.filter(play => /tackle for loss|\\btfl\\b/.test(identityResult(play))).length,
+    interceptions: opponentOffense.filter(play => /interception|\\bint\\b/.test(identityResult(play))).length,
+    fumbles: opponentOffense.filter(play => /fumble/.test(identityResult(play))).length,
+    touchdowns: opponentOffense.filter(play => /touchdown|\\btd\\b/.test(identityResult(play))).length,
+    rushTd: opponentOffense.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\\btd\\b/.test(identityResult(play))).length,
+    passTd: opponentOffense.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\\btd\\b/.test(identityResult(play))).length,
+  };
+  const downEfficiency = ['1', '2', '3', '4'].map(down => {
+    const attempts = opponentOffense.filter(play => num(play.dn) === Number(down) && num(play.dist) > 0);
+    const conversions = attempts.filter(play => num(play.gnls) >= num(play.dist) || /touchdown|\\btd\\b/.test(identityResult(play)));
+    return { down, attempts: attempts.length, conversions: conversions.length, rate: attempts.length ? (conversions.length / attempts.length) * 100 : 0 };
+  });
 
   const plays = useMemo(() => {
     if (phaseFilter === 'all') return scoutingPlays;
@@ -775,6 +801,44 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         </div>
 
 
+      </div>
+
+      {/* Opponent identity + down efficiency: selected opponent scouting only */}
+      <div className="grid dashboard-grid" style={{ marginBottom: 14 }}>
+        <Panel style={{ gridColumn: '1 / -1' }}>
+          <SectionTitle title="Team identity" detail={`${activeOpponent} · offensive scouting totals only`} />
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr>
+                <th>RUN ATT</th><th>RUN YDS</th><th>PASS ATT / COMP</th><th>PASS YDS</th>
+                <th>SACK</th><th>TFL</th><th>INT</th><th>FUMBLES</th><th>TD</th><th>RUSH TD</th><th>PASS TD</th>
+              </tr></thead>
+              <tbody><tr>
+                <td>{teamIdentity.runAtt}</td><td>{teamIdentity.runYds.toFixed(1)}</td>
+                <td>{teamIdentity.passAtt} / {teamIdentity.passComp}</td><td>{teamIdentity.passYds.toFixed(1)}</td>
+                <td>{teamIdentity.sacks}</td><td>{teamIdentity.tfl}</td><td>{teamIdentity.interceptions}</td>
+                <td>{teamIdentity.fumbles}</td><td>{teamIdentity.touchdowns}</td><td>{teamIdentity.rushTd}</td><td>{teamIdentity.passTd}</td>
+              </tr></tbody>
+            </table>
+          </div>
+          <div className="field-hint" style={{ marginTop: 9 }}>
+            Sacks, TFL, interceptions, fumbles, and touchdowns are counted only when the uploaded play result identifies them. Missing result details cannot be inferred.
+          </div>
+        </Panel>
+        <Panel style={{ gridColumn: '1 / -1' }}>
+          <SectionTitle title="Down efficiency" detail="Offensive snaps · conversion = gain reaches the line to gain or a touchdown" />
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>DOWN</th><th>ATTEMPTS</th><th>CONVERSIONS</th><th>CONVERSION RATE</th></tr></thead>
+              <tbody>
+                {downEfficiency.map(row => <tr key={row.down}>
+                  <td><strong>{row.down}{row.down === '1' ? 'st' : row.down === '2' ? 'nd' : row.down === '3' ? 'rd' : 'th'} Down</strong></td>
+                  <td>{row.attempts}</td><td>{row.conversions}</td><td>{row.rate.toFixed(1)}%</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       </div>
 
       {/* KPI Suite */}
