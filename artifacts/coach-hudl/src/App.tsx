@@ -572,20 +572,20 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
     passAtt: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).length,
     passComp: opponentOffense.filter(play => {
       const result = identityResult(play);
-      return /\\bcomplete(?:d)?\\b/.test(result) && !/incomplete/.test(result);
+      return /\bcomplete(?:d)?\b/.test(result) && !/incomplete/.test(result);
     }).length,
     passYds: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).reduce((sum, play) => sum + num(play.gnls), 0),
-    sacks: opponentOffense.filter(play => /\\bsack(?:ed)?\\b/.test(identityResult(play))).length,
-    tfl: opponentOffense.filter(play => /tackle for loss|\\btfl\\b/.test(identityResult(play))).length,
-    interceptions: opponentOffense.filter(play => /interception|\\bint\\b/.test(identityResult(play))).length,
+    sacks: opponentOffense.filter(play => /\bsack(?:ed)?\b/.test(identityResult(play))).length,
+    tfl: opponentOffense.filter(play => /tackle for loss|\btfl\b/.test(identityResult(play))).length,
+    interceptions: opponentOffense.filter(play => /interception|\bint\b/.test(identityResult(play))).length,
     fumbles: opponentOffense.filter(play => /fumble/.test(identityResult(play))).length,
-    touchdowns: opponentOffense.filter(play => /touchdown|\\btd\\b/.test(identityResult(play))).length,
-    rushTd: opponentOffense.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\\btd\\b/.test(identityResult(play))).length,
-    passTd: opponentOffense.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\\btd\\b/.test(identityResult(play))).length,
+    touchdowns: opponentOffense.filter(play => /touchdown|\btd\b/.test(identityResult(play))).length,
+    rushTd: opponentOffense.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\btd\b/.test(identityResult(play))).length,
+    passTd: opponentOffense.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\btd\b/.test(identityResult(play))).length,
   };
   const downEfficiency = ['1', '2', '3', '4'].map(down => {
     const attempts = opponentOffense.filter(play => num(play.dn) === Number(down) && num(play.dist) > 0);
-    const conversions = attempts.filter(play => num(play.gnls) >= num(play.dist) || /touchdown|\\btd\\b/.test(identityResult(play)));
+    const conversions = attempts.filter(play => num(play.gnls) >= num(play.dist) || /touchdown|\btd\b/.test(identityResult(play)));
     return { down, attempts: attempts.length, conversions: conversions.length, rate: attempts.length ? (conversions.length / attempts.length) * 100 : 0 };
   });
 
