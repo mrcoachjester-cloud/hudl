@@ -283,35 +283,51 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
     let targetPlays = gameData[gameId];
-    if (!targetPlays) {
-      let livePlays: Play[] = [];
-      let scoutingPlays: Play[] = [];
-      if (isSupabaseConfigured) {
-        try {
-          const remoteLive = await getLivePlays(gameId);
-          if (remoteLive.length > 0) livePlays = remoteLive.map(livePlayToStandard);
+    // Supabase is the source of truth for Live Game. A cached empty/stale list
+    // must never hide plays that are already saved remotely.
+    if (isSupabaseConfigured) {
+      let liveLoaded = false;
+      try {
+        const remoteLive = await getLivePlays(gameId);
+        targetPlays = {
+          scouting: targetPlays?.scouting ?? [],
+          live: remoteLive.map(livePlayToStandard),
+        };
+        liveLoaded = true;
+      } catch (err) {
+        console.warn('Could not refresh Live Game plays from Supabase; retaining cached data:', err);
+      }
+      if (!targetPlays || !liveLoaded) {
+        let scoutingPlays: Play[] = targetPlays?.scouting ?? [];
+        if (!targetPlays) {
           const gameObj = data.schedule.find(g => g.id === gameId);
           const seasons = await getSeasons();
           const currentSeason = seasons.find(s => s.is_current) ?? seasons[0];
           if (currentSeason && gameObj) {
-            const sessions = await getScoutingSessions(currentSeason.id);
-            const matchedSession = sessions.find(
-              s =>
-                s.game_id === gameId ||
-                (s.opponent && s.opponent.toLowerCase().trim() === gameObj.opponent.toLowerCase().trim())
-            );
-            if (matchedSession) {
-              const remoteScout = await getScoutingPlays(matchedSession.id);
-              if (remoteScout.length > 0) scoutingPlays = remoteScout.map(scoutingPlayToStandard);
+            try {
+              const sessions = await getScoutingSessions(currentSeason.id);
+              const matchedSession = sessions.find(
+                s =>
+                  s.game_id === gameId ||
+                  (s.opponent && s.opponent.toLowerCase().trim() === gameObj.opponent.toLowerCase().trim())
+              );
+              if (matchedSession) {
+                const remoteScout = await getScoutingPlays(matchedSession.id);
+                if (remoteScout.length > 0) scoutingPlays = remoteScout.map(scoutingPlayToStandard);
+              }
+            } catch (err) {
+              console.warn('Could not fetch scouting data from Supabase:', err);
             }
           }
-        } catch (err) {
-          console.warn('Could not fetch game data from Supabase:', err);
         }
-      } else if (gameId === demoSchedule[0].id) {
-        scoutingPlays = demoScouting;
+        targetPlays = {
+          scouting: scoutingPlays,
+          live: liveLoaded ? (targetPlays?.live ?? []) : (targetPlays?.live ?? []),
+        };
       }
-      targetPlays = { scouting: scoutingPlays, live: livePlays };
+    } else if (!targetPlays) {
+      const scoutingPlays = gameId === demoSchedule[0].id ? demoScouting : [];
+      targetPlays = { scouting: scoutingPlays, live: [] };
     }
     setData({
       ...data,
