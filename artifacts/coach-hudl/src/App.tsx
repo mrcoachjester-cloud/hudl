@@ -259,21 +259,36 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     const normalizedTeam = team.trim();
     if (!normalizedTeam || normalizedTeam === activeTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
+    const gameId = teamGame?.id ?? '';
+    let scouting: Play[] = [];
+    let live: Play[] = [];
     try {
-      const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({
-        ...data,
-        activeTeam: normalizedTeam,
-        activeGameId: teamGame?.id ?? data.activeGameId,
-        scouting,
-        live,
-      });
+      scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
     } catch (error) {
       console.error('Could not load team scouting data:', error);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
     }
+    if (gameId) {
+      // Load only this game's saved plays from Supabase, never another game's cache.
+      try {
+        live = (await getLivePlays(gameId)).map(livePlayToStandard);
+      } catch (error) {
+        console.error('Could not load Live Game plays for selected team:', error);
+        live = data.gameData?.[gameId]?.live ?? [];
+      }
+    }
+    const nextGameData = {
+      ...(data.gameData || {}),
+      ...(data.activeGameId ? { [data.activeGameId]: { scouting: data.scouting, live: data.live } } : {}),
+      ...(gameId ? { [gameId]: { scouting, live } } : {}),
+    };
+    setData({
+      ...data,
+      activeTeam: normalizedTeam,
+      activeGameId: gameId || data.activeGameId,
+      scouting,
+      live,
+      gameData: nextGameData,
+    });
   };
 
   const selectGame = async (gameId: string) => {
