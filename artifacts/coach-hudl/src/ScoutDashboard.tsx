@@ -22,7 +22,7 @@ function Bar({ label, value, total, green = false }: { label: string; value: num
 }
 function Slide({ number, title, subtitle, children }: { number: number; title: string; subtitle?: string; children: ReactNode }) {
   return <section className="scout-slide" data-slide={number}>
-    <div className="scout-slide-top"><span>COACH HUDL · SCOUTING</span><span>{String(number).padStart(2, '0')}</span></div>
+    <div className="scout-slide-top"><span>COACH CONNECT · SCOUTING</span><span>{String(number).padStart(2, '0')}</span></div>
     <div className="scout-slide-title"><div><div className="eyebrow">OPPONENT INTELLIGENCE</div><h2>{title}</h2>{subtitle && <p>{subtitle}</p>}</div></div>
     <div className="scout-slide-body">{children}</div>
     <div className="scout-slide-footer"><span>Prepared from selected Scout File</span><span>CONFIDENTIAL · COACHING STAFF</span></div>

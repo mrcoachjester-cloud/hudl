@@ -61,7 +61,7 @@ type Dataset = {
   gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
 };
 
-type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule';
+type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule' | '/player-stats';
 
 const STORAGE_KEY = 'coach-hudl-datasets-v2';
 const demoSchedule: ScheduleGame[] = [
@@ -259,21 +259,36 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     const normalizedTeam = team.trim();
     if (!normalizedTeam || normalizedTeam === activeTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
+    const gameId = teamGame?.id ?? '';
+    let scouting: Play[] = [];
+    let live: Play[] = [];
     try {
-      const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({
-        ...data,
-        activeTeam: normalizedTeam,
-        activeGameId: teamGame?.id ?? data.activeGameId,
-        scouting,
-        live,
-      });
+      scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
     } catch (error) {
       console.error('Could not load team scouting data:', error);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
     }
+    if (gameId) {
+      // Load only this game's saved plays from Supabase, never another game's cache.
+      try {
+        live = (await getLivePlays(gameId)).map(livePlayToStandard);
+      } catch (error) {
+        console.error('Could not load Live Game plays for selected team:', error);
+        live = data.gameData?.[gameId]?.live ?? [];
+      }
+    }
+    const nextGameData = {
+      ...(data.gameData || {}),
+      ...(data.activeGameId ? { [data.activeGameId]: { scouting: data.scouting, live: data.live } } : {}),
+      ...(gameId ? { [gameId]: { scouting, live } } : {}),
+    };
+    setData({
+      ...data,
+      activeTeam: normalizedTeam,
+      activeGameId: gameId || data.activeGameId,
+      scouting,
+      live,
+      gameData: nextGameData,
+    });
   };
 
   const selectGame = async (gameId: string) => {
@@ -282,15 +297,22 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       ...(data.gameData || {}),
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
-    let targetPlays = gameData[gameId];
-    if (!targetPlays) {
-      let livePlays: Play[] = [];
-      let scoutingPlays: Play[] = [];
-      if (isSupabaseConfigured) {
+    const cachedTargetPlays = gameData[gameId];
+    let targetPlays = cachedTargetPlays;
+    if (isSupabaseConfigured) {
+      let livePlays: Play[] = cachedTargetPlays?.live ?? [];
+      let scoutingPlays: Play[] = cachedTargetPlays?.scouting ?? [];
+      try {
+        // Always re-read Live Game from Supabase so an empty/stale local cache
+        // cannot hide saved plays after switching games or returning to a game.
+        const remoteLive = await getLivePlays(gameId);
+        livePlays = remoteLive.map(livePlayToStandard);
+      } catch (err) {
+        console.warn('Could not refresh Live Game plays from Supabase; retaining cached data:', err);
+      }
+      if (!cachedTargetPlays) {
+        const gameObj = data.schedule.find(g => g.id === gameId);
         try {
-          const remoteLive = await getLivePlays(gameId);
-          if (remoteLive.length > 0) livePlays = remoteLive.map(livePlayToStandard);
-          const gameObj = data.schedule.find(g => g.id === gameId);
           const seasons = await getSeasons();
           const currentSeason = seasons.find(s => s.is_current) ?? seasons[0];
           if (currentSeason && gameObj) {
@@ -306,12 +328,12 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
             }
           }
         } catch (err) {
-          console.warn('Could not fetch game data from Supabase:', err);
+          console.warn('Could not fetch scouting data from Supabase:', err);
         }
-      } else if (gameId === demoSchedule[0].id) {
-        scoutingPlays = demoScouting;
       }
       targetPlays = { scouting: scoutingPlays, live: livePlays };
+    } else if (!targetPlays) {
+      targetPlays = { scouting: gameId === demoSchedule[0].id ? demoScouting : [], live: [] };
     }
     setData({
       ...data,
@@ -342,6 +364,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     { href: '/live', label: 'Live game', icon: Target },
     { href: '/reports', label: 'Reports', icon: ClipboardList },
     { href: '/schedule', label: 'Schedule', icon: FileSpreadsheet },
+    { href: '/player-stats', label: 'Player Stats', icon: BarChart3 },
   ];
 
   const totalPlays = data.scouting.length + data.live.length;
@@ -349,10 +372,19 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
-        <div className="brand">
-          <div className="brand-mark">CC</div>
+        <div className="brand" aria-label="Ironclad Athletics">
+          <div className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 44" role="img" focusable="false">
+              <path d="M20 2 36 8v13c0 9-6.5 16-16 21C10.5 37 4 30 4 21V8L20 2Z" fill="#101820" stroke="#168BFF" strokeWidth="2.5" />
+              <g transform="rotate(-34 20 23)">
+                <ellipse cx="20" cy="23" rx="6.5" ry="11" fill="#F4F7FB" stroke="#168BFF" strokeWidth="1.4" />
+                <path d="M20 13v20" stroke="#101820" strokeWidth="1.3" />
+                <path d="M17.5 19h5m-5 4h5m-5 4h5" stroke="#101820" strokeWidth="1.3" strokeLinecap="round" />
+              </g>
+            </svg>
+          </div>
           <div className="brand-name">
-            coach<span>Connect</span>
+            <strong>IRONCLAD</strong><span>ATHLETICS</span>
           </div>
         </div>
         <div className="nav-label eyebrow">Workspace</div>
@@ -388,7 +420,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
             <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation">
               <Menu />
             </button>
-            <span>Coach Connect workspace</span>
+            <span>Ironclad Athletics workspace</span>
           </div>
 
           <div className="topbar-actions" style={{ gap: 10 }}>
@@ -764,10 +796,10 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
 
       {/* Live Shift Alert Banner */}
       {hasLive && (
-        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(31, 201, 139, 0.06)', borderColor: 'rgba(31, 201, 139, 0.28)' }}>
+        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(22, 139, 255, 0.06)', borderColor: 'rgba(22, 139, 255, 0.28)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(31, 201, 139, 0.18)', color: '#62dfae' }}>
+              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(22, 139, 255, 0.18)', color: '#9fcdf5' }}>
                 <Activity size={18} />
               </div>
               <div>
@@ -876,20 +908,33 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         <Panel>
           <SectionTitle title="Formation tendencies" detail="Package distribution & favorite call" />
           {formationStats.length ? (
-            <div className="feed">
+            <div className="feed formation-tendencies">
               {formationStats.map(f => (
-                <div className="feed-row" key={f.form}>
-                  <div className="feed-main">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <strong>{f.form}</strong>
-                      <span className="eyebrow" style={{ color: '#62dfae' }}>{f.runPct}% Run / {f.passPct}% Pass</span>
+                <div
+                  className="formation-tendency-row"
+                  key={f.form}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    alignItems: 'center',
+                    columnGap: 12,
+                    rowGap: 4,
+                    padding: '10px 0',
+                    borderTop: '1px solid rgba(255,255,255,.055)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3, color: '#eeeaf7' }}>{f.form}</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 10px', marginTop: 3, fontSize: 11, lineHeight: 1.4, color: 'hsl(var(--muted-foreground))' }}>
+                      <strong style={{ color: '#9fcdf5', fontSize: 11, whiteSpace: 'nowrap' }}>{f.runPct}% Run / {f.passPct}% Pass</strong>
+                      <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Primary call: <b>{f.topCall}</b></span>
+                      <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Avg gain: <b>{f.avg} yds</b></span>
                     </div>
-                    <span>Primary call: <b>{f.topCall}</b> · Avg gain: <b>{f.avg} yds</b></span>
-                    <div className="progress" style={{ marginTop: 6, height: 4 }}>
+                    <div className="progress" style={{ marginTop: 5, height: 3 }}>
                       <span style={{ width: `${f.runPct}%`, background: 'hsl(var(--accent))' }} />
                     </div>
                   </div>
-                  <span className="tag" style={{ marginLeft: 8 }}>{f.total} snaps</span>
+                  <span className="tag" style={{ whiteSpace: 'nowrap' }}>{f.total} snaps</span>
                 </div>
               ))}
             </div>
@@ -951,7 +996,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
                       </td>
                       <td>{play.form}</td>
                       <td>{play.carrier}</td>
-                      <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>
+                      <td style={{ color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>
                         {num(play.gnls) > 0 ? `+${play.gnls}` : play.gnls}
                       </td>
                       <td>{play.result}</td>
@@ -1370,7 +1415,7 @@ function ScoutPage({ data }: { data: Dataset }) {
             <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span> <span style={{ marginLeft: 7 }}>{play.offPlay}</span></td>
             <td>{play.form}</td>
             <td>{play.dir}</td>
-            <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td style={{ color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>{play.gnls}</td>
             <td>{play.defense} · {play.scheme}</td>
           </tr>)}</tbody>
         </table></div> : <div className="empty"><Search size={28} /><h3>Nothing matches that filter</h3><p>Clear a dropdown or reset the filter block.</p></div>}
@@ -1491,7 +1536,7 @@ function ScoutPage({ data }: { data: Dataset }) {
             <td><strong>{play.offPlay}</strong></td>
             <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span></td>
             <td>{play.dir}</td>
-            <td style={scoutIsExplosive(play) ? { color: '#e8c886', fontWeight: 700 } : { color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td style={scoutIsExplosive(play) ? { color: '#e8c886', fontWeight: 700 } : { color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>{play.gnls}</td>
             <td>{play.scheme}</td>
             <td>{play.backfield}</td>
             <td>{play.motion}</td>
@@ -1507,7 +1552,7 @@ function ScoutPage({ data }: { data: Dataset }) {
 function ReportsPage({ data }: { data: Dataset }) {
   const [active, setActive] = useState<'qb' | 'carrier' | 'explosive'>('qb'); const plays = data.scouting; const qbs = plays.filter(p => p.type.toLowerCase().includes('pass')); const carriers = Array.from(new Set(plays.map(p => p.carrier))).filter(Boolean).map(name => { const rows = plays.filter(p => p.carrier === name); return { name, count: rows.length, yards: rows.reduce((sum, p) => sum + num(p.gnls), 0), explosive: rows.filter(isExplosive).length }; }).sort((a, b) => b.yards - a.yards);
   const exportReport = () => { const headers = ['Play #', 'Type', 'Ball Carrier', 'Gain/Loss', 'Result', 'Formation', 'Play Call']; const rows = plays.map(p => [p.playNo, p.type, p.carrier, p.gnls, p.result, p.form, p.offPlay].map(csvCell).join(',')); download('coach-hudl-report.csv', [headers.join(','), ...rows].join('\n')); };
-  return <div className="content"><PageHead eyebrow="Reports · ready for the room" title="Make the call." description="Clean report views for the staff meeting, the sideline, and the next opponent." actions={<button className="btn btn-primary" onClick={exportReport} data-testid="button-export-report"><Download /> Export CSV</button>} /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, .8fr) minmax(0, 1.2fr)' }}><Panel><SectionTitle title="Report views" detail="Select a lens" /><div className="report-list"><button className={`report-card ${active === 'qb' ? 'active-report' : ''}`} onClick={() => setActive('qb')} data-testid="button-report-qb"><div className="report-info"><div className="report-icon"><Users size={16} /></div><div><h3>QB report</h3><p>Pass volume, RPOs, pressure</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('carrier')} data-testid="button-report-carrier"><div className="report-info"><div className="report-icon"><Zap size={16} /></div><div><h3>Ball-carrier report</h3><p>Usage, yardage, explosives</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('explosive')} data-testid="button-report-explosive"><div className="report-info"><div className="report-icon"><Sparkles size={16} /></div><div><h3>Explosive plays</h3><p>Every gain of 12+ yards</p></div></div><ChevronRight size={16} /></button></div><div className="callout" style={{ marginTop: 18 }}><Download />The export includes normalized fields from every charted snap, ready for a staff packet.</div></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={active === 'qb' ? 'Quarterback report' : active === 'carrier' ? 'Ball-carrier report' : 'Explosive-play report'} detail={`${plays.length} snaps in scouting board`} /></div>{active === 'qb' && <div className="panel-pad"><div className="grid kpi-grid" style={{ marginBottom: 22 }}><Kpi label="Pass attempts" value={String(qbs.length)} note="charted throws" /><Kpi label="Pass yards" value={String(qbs.reduce((sum, p) => sum + num(p.gnls), 0))} note="net charted gain" green /><Kpi label="Pressure" value={String(qbs.filter(p => false).length)} note="blitz-tagged" /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Call</th><th>Formation</th><th>Result</th><th>Gain</th></tr></thead><tbody>{qbs.map((p, i) => <tr key={i}><td><strong>{p.offPlay}</strong></td><td>{p.form}</td><td>{p.result}</td><td>{p.gnls}</td></tr>)}</tbody></table></div></div>}{active === 'carrier' && <div className="panel-pad"><div className="table-wrap"><table className="data-table"><thead><tr><th>Ball carrier</th><th>Touches</th><th>Total gain</th><th>Avg / touch</th><th>Explosives</th></tr></thead><tbody>{carriers.map(row => <tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.count}</td><td style={{ color: '#62dfae' }}>{row.yards}</td><td>{(row.yards / row.count).toFixed(1)}</td><td><span className="tag green">{row.explosive}</span></td></tr>)}</tbody></table></div></div>}{active === 'explosive' && <div className="panel-pad"><div className="feed">{plays.filter(isExplosive).sort((a, b) => num(b.gnls) - num(a.gnls)).map((p, i) => <div className="feed-row" key={i}><span className="feed-num">#{p.playNo}</span><div className="feed-main"><strong>{p.offPlay} · {p.result}</strong><span>{p.type} · {p.form} · {p.yardLn}</span></div><span className="tag green">+{p.gnls}</span></div>)}</div></div>}</Panel></div></div>;
+  return <div className="content"><PageHead eyebrow="Reports · ready for the room" title="Make the call." description="Clean report views for the staff meeting, the sideline, and the next opponent." actions={<button className="btn btn-primary" onClick={exportReport} data-testid="button-export-report"><Download /> Export CSV</button>} /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, .8fr) minmax(0, 1.2fr)' }}><Panel><SectionTitle title="Report views" detail="Select a lens" /><div className="report-list"><button className={`report-card ${active === 'qb' ? 'active-report' : ''}`} onClick={() => setActive('qb')} data-testid="button-report-qb"><div className="report-info"><div className="report-icon"><Users size={16} /></div><div><h3>QB report</h3><p>Pass volume, RPOs, pressure</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('carrier')} data-testid="button-report-carrier"><div className="report-info"><div className="report-icon"><Zap size={16} /></div><div><h3>Ball-carrier report</h3><p>Usage, yardage, explosives</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('explosive')} data-testid="button-report-explosive"><div className="report-info"><div className="report-icon"><Sparkles size={16} /></div><div><h3>Explosive plays</h3><p>Every gain of 12+ yards</p></div></div><ChevronRight size={16} /></button></div><div className="callout" style={{ marginTop: 18 }}><Download />The export includes normalized fields from every charted snap, ready for a staff packet.</div></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={active === 'qb' ? 'Quarterback report' : active === 'carrier' ? 'Ball-carrier report' : 'Explosive-play report'} detail={`${plays.length} snaps in scouting board`} /></div>{active === 'qb' && <div className="panel-pad"><div className="grid kpi-grid" style={{ marginBottom: 22 }}><Kpi label="Pass attempts" value={String(qbs.length)} note="charted throws" /><Kpi label="Pass yards" value={String(qbs.reduce((sum, p) => sum + num(p.gnls), 0))} note="net charted gain" green /><Kpi label="Pressure" value={String(qbs.filter(p => false).length)} note="blitz-tagged" /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Call</th><th>Formation</th><th>Result</th><th>Gain</th></tr></thead><tbody>{qbs.map((p, i) => <tr key={i}><td><strong>{p.offPlay}</strong></td><td>{p.form}</td><td>{p.result}</td><td>{p.gnls}</td></tr>)}</tbody></table></div></div>}{active === 'carrier' && <div className="panel-pad"><div className="table-wrap"><table className="data-table"><thead><tr><th>Ball carrier</th><th>Touches</th><th>Total gain</th><th>Avg / touch</th><th>Explosives</th></tr></thead><tbody>{carriers.map(row => <tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.count}</td><td style={{ color: '#9fcdf5' }}>{row.yards}</td><td>{(row.yards / row.count).toFixed(1)}</td><td><span className="tag green">{row.explosive}</span></td></tr>)}</tbody></table></div></div>}{active === 'explosive' && <div className="panel-pad"><div className="feed">{plays.filter(isExplosive).sort((a, b) => num(b.gnls) - num(a.gnls)).map((p, i) => <div className="feed-row" key={i}><span className="feed-num">#{p.playNo}</span><div className="feed-main"><strong>{p.offPlay} · {p.result}</strong><span>{p.type} · {p.form} · {p.yardLn}</span></div><span className="tag green">+{p.gnls}</span></div>)}</div></div>}</Panel></div></div>;
 }
 
 function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
@@ -1775,6 +1820,344 @@ function ReportsHubPage({ data }: { data: Dataset }) {
   </div>;
 }
 
+
+type PlayerStatLine = {
+  rushingCarries: number; rushingYards: number; rushingTd: number; fumbles: number;
+  passAttempts: number; passCompletions: number; passYards: number; passTd: number; interceptions: number;
+  targets: number; receptions: number; receivingYards: number; receivingTd: number;
+};
+type StatsPlayer = { id: string; jersey: string; name: string };
+type PassEvent = { id: string; qbId: string; outcome: 'complete' | 'incomplete' | 'interception'; receiverId: string; yards: number; td: boolean };
+type RushEvent = { id: string; playerId: string; yards: number; td: boolean; fumble: boolean };
+type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine>; passEvents?: PassEvent[]; rushEvents?: RushEvent[] };
+type PlayerStatsStore = { players: StatsPlayer[]; games: StatsGame[] };
+const PLAYER_STATS_KEY = 'coach-hudl-independent-player-stats-v1';
+const blankStatLine = (): PlayerStatLine => ({
+  rushingCarries: 0, rushingYards: 0, rushingTd: 0, fumbles: 0,
+  passAttempts: 0, passCompletions: 0, passYards: 0, passTd: 0, interceptions: 0,
+  targets: 0, receptions: 0, receivingYards: 0, receivingTd: 0,
+});
+const loadPlayerStats = (): PlayerStatsStore => {
+  try {
+    const raw = localStorage.getItem(PLAYER_STATS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PlayerStatsStore>;
+      return { players: Array.isArray(parsed.players) ? parsed.players : [], games: Array.isArray(parsed.games) ? parsed.games : [] };
+    }
+  } catch (error) { console.warn('Could not load independent player stats:', error); }
+  return { players: [], games: [] };
+};
+const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[] = [
+  { key: 'rushingCarries', label: 'Car', group: 'Rushing' }, { key: 'rushingYards', label: 'Yds', group: 'Rushing' },
+  { key: 'rushingTd', label: 'TD', group: 'Rushing' }, { key: 'fumbles', label: 'Fum', group: 'Rushing' },
+  { key: 'passAttempts', label: 'Att', group: 'Passing' }, { key: 'passCompletions', label: 'Comp', group: 'Passing' },
+  { key: 'passYards', label: 'Yds', group: 'Passing' }, { key: 'passTd', label: 'TD', group: 'Passing' },
+  { key: 'interceptions', label: 'INT', group: 'Passing' }, { key: 'targets', label: 'Tgt', group: 'Receiving' },
+  { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
+  { key: 'receivingTd', label: 'TD', group: 'Receiving' },
+];
+function PlayerStatsPage({ data }: { data: Dataset }) {
+  const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
+  const [view, setView] = useState<'game' | 'season'>('game');
+  const [statGroup, setStatGroup] = useState<'Rushing' | 'Pass / Receive'>('Rushing');
+  const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
+  const [newJersey, setNewJersey] = useState('');
+  const [newName, setNewName] = useState('');
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [catchPlayerId, setCatchPlayerId] = useState('');
+  const [catchYards, setCatchYards] = useState('');
+  const [catchTd, setCatchTd] = useState(false);
+  const [passQbId, setPassQbId] = useState('');
+  const [passOutcome, setPassOutcome] = useState<'complete' | 'incomplete' | 'interception'>('complete');
+  const [passReceiverId, setPassReceiverId] = useState('');
+  const [passYards, setPassYards] = useState('');
+  const [passTd, setPassTd] = useState(false);
+  const [editingPassId, setEditingPassId] = useState('');
+  const [passInt, setPassInt] = useState(false);
+  const [rushPlayerId, setRushPlayerId] = useState('');
+  const [rushYards, setRushYards] = useState('');
+  const [rushTd, setRushTd] = useState(false);
+  const [rushFumble, setRushFumble] = useState(false);
+  const [editingRushId, setEditingRushId] = useState('');
+  const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
+  const [showNewGame, setShowNewGame] = useState(false);
+  const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
+  const activeScheduleGame = data.schedule.find(game => game.id === data.activeGameId);
+  const activeTeamName = (data.activeTeam || activeScheduleGame?.opponent || '').trim();
+  const activeSeason = activeScheduleGame?.season || seasonView || String(new Date().getFullYear());
+  useEffect(() => {
+    try { localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(store)); }
+    catch (error) { console.error('Could not save independent player stats:', error); }
+  }, [store]);
+  const selectedGame = activeTeamName
+    ? store.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase())
+    : (store.games.find(game => game.id === selectedGameId) ?? store.games[0]);
+  useEffect(() => {
+    if (!activeTeamName) return;
+    const existing = store.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase());
+    if (existing) {
+      setSelectedGameId(existing.id);
+      setSeasonView(activeSeason);
+      return;
+    }
+    const created: StatsGame = { id: 'stats-game-' + Date.now(), season: activeSeason, opponent: activeTeamName, date: activeScheduleGame?.date ?? '', notes: '', stats: {} };
+    setStore(current => {
+      const match = current.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase());
+      if (match) { setSelectedGameId(match.id); return current; }
+      setSelectedGameId(created.id);
+      return { ...current, games: [created, ...current.games] };
+    });
+    setSeasonView(activeSeason);
+  }, [activeTeamName, activeSeason, activeScheduleGame?.id]);
+  const displayedSeason = view === 'season' ? seasonView : (selectedGame?.season || activeSeason || gameDraft.season);
+  const updateLine = (playerId: string, key: keyof PlayerStatLine, value: string) => {
+    if (!selectedGame) return;
+    const parsed = value.trim() === '' ? 0 : Number(value);
+    const safeValue = Number.isFinite(parsed) ? parsed : 0;
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => game.id !== selectedGame.id ? game : {
+        ...game, stats: { ...game.stats, [playerId]: { ...blankStatLine(), ...(game.stats[playerId] ?? {}), [key]: safeValue } }
+      })
+    }));
+  };
+  const applyPassEvent = (stats: Record<string, PlayerStatLine>, event: PassEvent, direction: 1 | -1) => {
+    const add = (playerId: string, changes: Partial<PlayerStatLine>) => {
+      if (!playerId) return;
+      const line = { ...blankStatLine(), ...(stats[playerId] ?? {}) };
+      (Object.keys(changes) as (keyof PlayerStatLine)[]).forEach(key => { line[key] += Number(changes[key] || 0) * direction; });
+      stats[playerId] = line;
+    };
+    add(event.qbId, {
+      passAttempts: 1, passCompletions: event.outcome === 'complete' ? 1 : 0,
+      passYards: event.outcome === 'complete' ? event.yards : 0,
+      passTd: event.outcome === 'complete' && event.td ? 1 : 0,
+      interceptions: event.outcome === 'interception' ? 1 : 0,
+    });
+    if (event.outcome !== 'interception' && event.receiverId) {
+      add(event.receiverId, {
+        targets: 1, receptions: event.outcome === 'complete' ? 1 : 0,
+        receivingYards: event.outcome === 'complete' ? event.yards : 0,
+        receivingTd: event.outcome === 'complete' && event.td ? 1 : 0,
+      });
+    }
+  };
+  const resetPassForm = () => { setPassYards(''); setPassTd(false); setPassInt(false); setEditingPassId(''); setPassOutcome('complete'); setPassReceiverId(''); };
+  const applyRushEvent = (stats: Record<string, PlayerStatLine>, event: RushEvent, direction: 1 | -1) => {
+    const line = { ...blankStatLine(), ...(stats[event.playerId] ?? {}) };
+    line.rushingCarries += direction; line.rushingYards += event.yards * direction;
+    line.rushingTd += (event.td ? 1 : 0) * direction; line.fumbles += (event.fumble ? 1 : 0) * direction;
+    stats[event.playerId] = line;
+  };
+  const resetRushForm = () => { setRushPlayerId(''); setRushYards(''); setRushTd(false); setRushFumble(false); setEditingRushId(''); };
+  const saveRushEvent = () => {
+    if (!selectedGame || !rushPlayerId || rushYards.trim() === '' || !Number.isFinite(Number(rushYards))) return;
+    const event: RushEvent = { id: editingRushId || 'rush-' + Date.now(), playerId: rushPlayerId, yards: Number(rushYards), td: rushTd, fumble: rushFumble };
+    setStore(current => ({ ...current, games: current.games.map(game => {
+      if (game.id !== selectedGame.id) return game;
+      const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+      const events = [...(game.rushEvents ?? [])]; const oldIndex = events.findIndex(item => item.id === event.id);
+      if (oldIndex >= 0) applyRushEvent(stats, events[oldIndex], -1); applyRushEvent(stats, event, 1);
+      if (oldIndex >= 0) events[oldIndex] = event; else events.push(event);
+      return { ...game, stats, rushEvents: events };
+    }) })); resetRushForm();
+  };
+  const editRushEvent = (event: RushEvent) => { setEditingRushId(event.id); setRushPlayerId(event.playerId); setRushYards(String(event.yards)); setRushTd(event.td); setRushFumble(event.fumble); };
+  const deleteRushEvent = (eventId: string) => {
+    if (!selectedGame || !window.confirm('Delete this rushing play and reverse its stats?')) return;
+    setStore(current => ({ ...current, games: current.games.map(game => {
+      if (game.id !== selectedGame.id) return game; const event = (game.rushEvents ?? []).find(item => item.id === eventId); if (!event) return game;
+      const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+      applyRushEvent(stats, event, -1); return { ...game, stats, rushEvents: (game.rushEvents ?? []).filter(item => item.id !== eventId) };
+    }) })); if (editingRushId === eventId) resetRushForm();
+  };
+  const savePassEvent = () => {
+    if (!selectedGame || !passQbId) return;
+    if (passOutcome === 'complete' && (!passReceiverId || passYards.trim() === '' || !Number.isFinite(Number(passYards)))) return;
+    const event: PassEvent = {
+      id: editingPassId || 'pass-' + Date.now(),
+      qbId: passQbId, outcome: passInt ? 'interception' : passOutcome,
+      receiverId: passInt || passOutcome === 'interception' ? '' : passReceiverId,
+      yards: !passInt && passOutcome === 'complete' ? Number(passYards) : 0,
+      td: !passInt && passOutcome === 'complete' && passTd,
+    };
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => {
+        if (game.id !== selectedGame.id) return game;
+        const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+        const events = [...(game.passEvents ?? [])];
+        const existingIndex = events.findIndex(item => item.id === event.id);
+        if (existingIndex >= 0) applyPassEvent(stats, events[existingIndex], -1);
+        applyPassEvent(stats, event, 1);
+        if (existingIndex >= 0) events[existingIndex] = event; else events.push(event);
+        return { ...game, stats, passEvents: events };
+      }),
+    }));
+    resetPassForm();
+  };
+  const editPassEvent = (event: PassEvent) => {
+    setEditingPassId(event.id); setPassQbId(event.qbId); setPassOutcome(event.outcome);
+    setPassReceiverId(event.receiverId); setPassYards(event.outcome === 'complete' ? String(event.yards) : '');
+    setPassTd(event.td); setPassInt(event.outcome === 'interception');
+  };
+  const deletePassEvent = (eventId: string) => {
+    if (!selectedGame || !window.confirm('Delete this pass play and reverse its stats?')) return;
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => {
+        if (game.id !== selectedGame.id) return game;
+        const event = (game.passEvents ?? []).find(item => item.id === eventId);
+        if (!event) return game;
+        const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+        applyPassEvent(stats, event, -1);
+        return { ...game, stats, passEvents: (game.passEvents ?? []).filter(item => item.id !== eventId) };
+      }),
+    }));
+    if (editingPassId === eventId) resetPassForm();
+  };
+  const addPlayer = () => {
+    const jersey = newJersey.trim();
+    if (!jersey) return;
+    const existing = store.players.find(player => player.jersey.toLowerCase() === jersey.toLowerCase());
+    if (existing) {
+      setNewJersey(''); setNewName(''); setShowQuickAdd(false);
+      return;
+    }
+    const player = { id: 'player-' + Date.now(), jersey, name: newName.trim() };
+    setStore(current => ({ ...current, players: [...current.players, player].sort((a,b) => a.jersey.localeCompare(b.jersey, undefined, { numeric: true })) }));
+    setNewJersey(''); setNewName(''); setShowQuickAdd(false);
+  };
+  const addGame = () => {
+    if (!gameDraft.season.trim() || !gameDraft.opponent.trim()) return;
+    const game: StatsGame = { id: 'stats-game-' + Date.now(), season: gameDraft.season.trim(), opponent: gameDraft.opponent.trim(), date: gameDraft.date, notes: '', stats: {} };
+    setStore(current => ({ ...current, games: [game, ...current.games] }));
+    setSelectedGameId(game.id);
+    setGameDraft(current => ({ ...current, opponent: '', date: '' }));
+    setShowNewGame(false); setView('game'); setSeasonView(game.season);
+  };
+  const updateGame = (patch: Partial<StatsGame>) => {
+    if (!selectedGame) return;
+    setStore(current => ({ ...current, games: current.games.map(game => game.id === selectedGame.id ? { ...game, ...patch } : game) }));
+  };
+  const seasonPlayers = store.players.map(player => {
+    const total = blankStatLine();
+    store.games.filter(game => game.season === displayedSeason).forEach(game => {
+      const line = game.stats[player.id];
+      if (line) statColumns.forEach(column => { total[column.key] += Number(line[column.key] || 0); });
+    });
+    return { player, total };
+  });
+  const inputStyle: CSSProperties = { width: '100%', minWidth: 48, boxSizing: 'border-box', padding: '7px 5px', border: '1px solid hsl(var(--border))', borderRadius: 5, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontSize: 13 };
+  const cellStyle: CSSProperties = { padding: '5px 6px', borderBottom: '1px solid hsl(var(--border))', textAlign: 'center', whiteSpace: 'nowrap' };
+  const visibleColumns = statColumns.filter(column => statGroup === 'Pass / Receive' ? ['Passing', 'Receiving'].includes(column.group) : column.group === statGroup);
+  const statTable = (rows: { player: StatsPlayer; line: PlayerStatLine }[], editable: boolean) => (
+    <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, overflow: 'hidden' }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#168BFF', color: '#fff' }}>
+              <th style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', width: '30%', minWidth: 90 }}>Jersey / Player</th>
+              {visibleColumns.map(column => <th key={column.key} style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, fontWeight: 800, padding: '8px 3px' }}>{column.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ player, line }) => <tr key={player.id}>
+              <td style={{ ...cellStyle, textAlign: 'left', fontWeight: 650, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                <span style={{ display: 'inline-block', color: '#58aaff', fontWeight: 800, marginRight: 5 }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
+              </td>
+              {visibleColumns.map(column => <td key={column.key} style={{ ...cellStyle, padding: '5px 3px' }}>
+                {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" inputMode="numeric" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 0, padding: '9px 2px', fontSize: 16, minHeight: 40 }} /> : (line[column.key] || 0)}
+              </td>)}
+            </tr>)}
+            {rows.length > 0 && <tr style={{ background: 'hsl(var(--muted))', fontWeight: 800 }}>
+              <td style={{ ...cellStyle, textAlign: 'left' }}>TOTAL</td>
+              {visibleColumns.map(column => <td key={column.key} style={cellStyle}>{rows.reduce((sum, row) => sum + Number(row.line[column.key] || 0), 0)}</td>)}
+            </tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+  const currentRows = store.players.map(player => ({ player, line: selectedGame?.stats[player.id] ?? blankStatLine() }));
+  return <div className="content">
+    <PageHead eyebrow="Standalone tool · player statistics" title="Player Stats" description="A spreadsheet-style stat sheet for individual offensive production. Independent of Live Game charting and Scouting." />
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+      <button className={'btn ' + (view === 'game' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('game')}>Game Stats</button>
+      <button className={'btn ' + (view === 'season' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('season')}>Season Stats</button>
+      <div style={{ flex: 1 }} />
+      <button className="btn btn-ghost" onClick={() => setShowQuickAdd(value => !value)}><Plus size={16} /> Quick Add Player</button>
+      {!activeTeamName && <button className="btn btn-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>}
+    </div>
+    {showQuickAdd && <Panel><SectionTitle title="Quick add player" detail="Add a jersey number now, with an optional name. Existing jersey numbers are reused." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input className="input" aria-label="Jersey number" placeholder="Jersey number (required)" value={newJersey} onChange={event => setNewJersey(event.target.value)} style={{ maxWidth: 220 }} />
+      <input className="input" aria-label="Player name" placeholder="Player name (optional)" value={newName} onChange={event => setNewName(event.target.value)} style={{ maxWidth: 280 }} />
+      <button className="btn btn-primary" onClick={addPlayer}>Add Player</button>
+    </div></Panel>}
+    {showNewGame && <Panel><SectionTitle title="Start a stat sheet" detail="This game is created only inside Player Stats; it does not change Schedule." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input className="input" aria-label="Stats season" placeholder="Season" value={gameDraft.season} onChange={event => setGameDraft({ ...gameDraft, season: event.target.value })} style={{ maxWidth: 130 }} />
+      <input className="input" aria-label="Stats opponent" placeholder="Opponent / game label" value={gameDraft.opponent} onChange={event => setGameDraft({ ...gameDraft, opponent: event.target.value })} style={{ maxWidth: 260 }} />
+      <input className="input" aria-label="Stats game date" type="date" value={gameDraft.date} onChange={event => setGameDraft({ ...gameDraft, date: event.target.value })} />
+      <button className="btn btn-primary" onClick={addGame}>Create Game</button>
+    </div></Panel>}
+    <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
+      {(['Rushing', 'Pass / Receive'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
+    </div>
+    {view === 'game' ? <Panel>
+      <SectionTitle title="Game Stats" detail={statGroup === 'Pass / Receive' ? 'Log each pass play above. The table below shows the automatically updated passing and receiving totals.' : 'Enter totals by player. Use the jersey number as a quick reference.'} />
+      {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
+        <span style={{ fontWeight: 750 }}>Selected above:</span>
+        <span style={{ color: '#58aaff', fontWeight: 750 }}>{activeTeamName}</span>
+        <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
+      </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
+      {selectedGame && <>
+        {statGroup === 'Rushing' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
+<SectionTitle title={editingRushId ? 'Edit Rushing Play' : 'Record Rushing Play'} detail="Record each carry once. Carries, yards, touchdowns, and fumbles update automatically." />
+<div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, alignItems: 'end' }}>
+<div><label htmlFor="rush-player" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Runner</label><select id="rush-player" className="input" value={rushPlayerId} onChange={event => setRushPlayerId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select player</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
+<div><label htmlFor="rush-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="rush-yards" className="input" type="number" inputMode="numeric" step="1" value={rushYards} onChange={event => setRushYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={rushTd} onChange={event => setRushTd(event.target.checked)} /> TD</label>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={rushFumble} onChange={event => setRushFumble(event.target.checked)} /> Fumble</label>
+<button className="btn btn-primary" onClick={saveRushEvent} disabled={!rushPlayerId || rushYards.trim() === '' || !Number.isFinite(Number(rushYards))} style={{ minHeight: 44 }}>{editingRushId ? 'Save Changes' : 'Record Rush'}</button>
+{editingRushId && <button className="btn btn-ghost" onClick={resetRushForm} style={{ minHeight: 44 }}>Cancel Edit</button>}
+</div>
+{(selectedGame?.rushEvents ?? []).length > 0 && <div style={{ marginTop: 14, overflowX: 'auto' }}><strong style={{ display: 'block', marginBottom: 8 }}>Recorded Rushing Plays</strong><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left', padding: 6 }}>Runner</th><th style={{ textAlign: 'right', padding: 6 }}>Yds</th><th style={{ textAlign: 'left', padding: 6 }}>Result</th><th style={{ textAlign: 'right', padding: 6 }}>Actions</th></tr></thead><tbody>{(selectedGame?.rushEvents ?? []).map(event => { const runner = store.players.find(player => player.id === event.playerId); return <tr key={event.id} style={{ borderTop: '1px solid hsl(var(--border))' }}><td style={{ padding: 6 }}>#{runner?.jersey ?? '?'}</td><td style={{ padding: 6, textAlign: 'right' }}>{event.yards}</td><td style={{ padding: 6 }}>{[event.td ? 'TD' : '', event.fumble ? 'Fumble' : ''].filter(Boolean).join(' · ') || 'Run'}</td><td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}><button className="btn btn-ghost" onClick={() => editRushEvent(event)} style={{ minHeight: 34, padding: '4px 8px' }}>Edit</button> <button className="btn btn-ghost" onClick={() => deleteRushEvent(event.id)} style={{ minHeight: 34, padding: '4px 8px' }}>Delete</button></td></tr>; })}</tbody></table></div>}
+</div>}
+        {statGroup === 'Pass / Receive' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
+          <SectionTitle title={editingPassId ? 'Edit Pass Play' : 'Record Pass Play'} detail="Record each throw once. QB and receiver totals update automatically; saved plays can be edited or deleted." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, alignItems: 'end' }}>
+            <div><label htmlFor="pass-qb" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>QB</label><select id="pass-qb" className="input" value={passQbId} onChange={event => setPassQbId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select QB</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
+            <div><label htmlFor="pass-outcome" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Result</label><select id="pass-outcome" className="input" value={passOutcome} onChange={event => setPassOutcome(event.target.value as 'complete' | 'incomplete' | 'interception')} style={{ width: '100%', minHeight: 44 }}><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="interception">INT</option></select></div>
+            {!passInt && passOutcome !== 'interception' && <div><label htmlFor="pass-receiver" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="pass-receiver" className="input" value={passReceiverId} onChange={event => setPassReceiverId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select receiver</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>}
+            {!passInt && passOutcome === 'complete' && <div><label htmlFor="pass-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="pass-yards" className="input" type="number" inputMode="numeric" step="1" value={passYards} onChange={event => setPassYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>}
+            {!passInt && passOutcome === 'complete' && <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passTd} onChange={event => setPassTd(event.target.checked)} /> TD</label>}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passInt} onChange={event => { setPassInt(event.target.checked); if (event.target.checked) { setPassOutcome('incomplete'); setPassTd(false); } else if (passOutcome === 'incomplete') setPassOutcome('complete'); }} /> INT</label>
+            <button className="btn btn-primary" onClick={savePassEvent} disabled={!passQbId || (!passInt && passOutcome === 'complete' && (!passReceiverId || passYards.trim() === ''))} style={{ minHeight: 44 }}>{editingPassId ? 'Save Changes' : 'Record Pass'}</button>
+            {editingPassId && <button className="btn btn-ghost" onClick={resetPassForm} style={{ minHeight: 44 }}>Cancel Edit</button>}
+          </div>
+          {(selectedGame?.passEvents ?? []).length > 0 && <div style={{ marginTop: 14, overflowX: 'auto' }}><strong style={{ display: 'block', marginBottom: 8 }}>Recorded Pass Plays</strong><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left', padding: 6 }}>QB</th><th style={{ textAlign: 'left', padding: 6 }}>Result</th><th style={{ textAlign: 'left', padding: 6 }}>Receiver</th><th style={{ textAlign: 'right', padding: 6 }}>Yds</th><th style={{ textAlign: 'right', padding: 6 }}>Actions</th></tr></thead><tbody>{(selectedGame?.passEvents ?? []).map((event, index) => { const qb = store.players.find(player => player.id === event.qbId); const receiver = store.players.find(player => player.id === event.receiverId); return <tr key={event.id} style={{ borderTop: '1px solid hsl(var(--border))' }}><td style={{ padding: 6 }}>#{qb?.jersey ?? '?'}</td><td style={{ padding: 6 }}>{event.outcome === 'complete' ? (event.td ? 'Complete · TD' : 'Complete') : event.outcome === 'incomplete' ? 'Incomplete' : 'INT'}</td><td style={{ padding: 6 }}>{receiver ? '#' + receiver.jersey : '—'}</td><td style={{ padding: 6, textAlign: 'right' }}>{event.outcome === 'complete' ? event.yards : '—'}</td><td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}><button className="btn btn-ghost" onClick={() => editPassEvent(event)} style={{ minHeight: 34, padding: '4px 8px' }}>Edit</button> <button className="btn btn-ghost" onClick={() => deletePassEvent(event.id)} style={{ minHeight: 34, padding: '4px 8px' }}>Delete</button></td></tr>; })}</tbody></table></div>}
+        </div>}
+        <div style={{ marginBottom: 12 }}>
+          <label htmlFor="player-stats-notes" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Notes / special plays (optional)</label>
+          <textarea id="player-stats-notes" className="input" value={selectedGame.notes} onChange={event => updateGame({ notes: event.target.value })} placeholder="e.g. #28 reverse pass, fake punt pass..." rows={2} style={{ width: '100%', resize: 'vertical' }} />
+        </div>
+        {store.players.length ? statTable(currentRows, true) : <div className="empty"><Users size={24} /><p>Add roster players or use Quick Add Player to begin.</p></div>}
+      </>}
+    </Panel> : <Panel>
+      <SectionTitle title="Season Stats" detail={'Totals from saved Player Stats games in ' + displayedSeason + '. These are independent of other app data.'} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <label htmlFor="player-stats-season" style={{ fontWeight: 700 }}>Season</label>
+        <select id="player-stats-season" className="input" value={displayedSeason} onChange={event => setSeasonView(event.target.value)} style={{ maxWidth: 150 }}>
+          {Array.from(new Set([...store.games.map(game => game.season), gameDraft.season])).sort((a,b) => Number(b)-Number(a)).map(season => <option key={season} value={season}>{season}</option>)}
+        </select>
+        <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{store.games.filter(game => game.season === displayedSeason).length} saved games</span>
+      </div>
+      {store.players.length ? statTable(seasonPlayers.map(({ player, total }) => ({ player, line: total })), false) : <div className="empty"><Users size={24} /><p>Add players to start building season totals.</p></div>}
+    </Panel>}
+    <p style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12, marginTop: 12 }}>This first version saves independently in this browser. It does not read or modify Schedule, Live Game, Scouting, or Reports.</p>
+  </div>;
+}
+
 function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
   const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });
   const [showArchived, setShowArchived] = useState(false);
@@ -1997,6 +2380,7 @@ function Router() {
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
         <Route path="/reports"><ReportsHubPage data={data} /></Route>
         <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
+        <Route path="/player-stats"><PlayerStatsPage data={data} /></Route>
         <Route><NotFoundPage /></Route>
       </Switch>
     </AppShell>
