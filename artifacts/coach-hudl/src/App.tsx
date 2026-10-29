@@ -1784,7 +1784,8 @@ type PlayerStatLine = {
 };
 type StatsPlayer = { id: string; jersey: string; name: string };
 type PassEvent = { id: string; qbId: string; outcome: 'complete' | 'incomplete' | 'interception'; receiverId: string; yards: number; td: boolean };
-type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine>; passEvents?: PassEvent[] };
+type RushEvent = { id: string; playerId: string; yards: number; td: boolean; fumble: boolean };
+type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine>; passEvents?: PassEvent[]; rushEvents?: RushEvent[] };
 type PlayerStatsStore = { players: StatsPlayer[]; games: StatsGame[] };
 const PLAYER_STATS_KEY = 'coach-hudl-independent-player-stats-v1';
 const blankStatLine = (): PlayerStatLine => ({
@@ -1828,6 +1829,12 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   const [passYards, setPassYards] = useState('');
   const [passTd, setPassTd] = useState(false);
   const [editingPassId, setEditingPassId] = useState('');
+  const [passInt, setPassInt] = useState(false);
+  const [rushPlayerId, setRushPlayerId] = useState('');
+  const [rushYards, setRushYards] = useState('');
+  const [rushTd, setRushTd] = useState(false);
+  const [rushFumble, setRushFumble] = useState(false);
+  const [editingRushId, setEditingRushId] = useState('');
   const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
   const [showNewGame, setShowNewGame] = useState(false);
   const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
@@ -1891,16 +1898,44 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       });
     }
   };
-  const resetPassForm = () => { setPassYards(''); setPassTd(false); setEditingPassId(''); };
+  const resetPassForm = () => { setPassYards(''); setPassTd(false); setPassInt(false); setEditingPassId(''); setPassOutcome('complete'); setPassReceiverId(''); };
+  const applyRushEvent = (stats: Record<string, PlayerStatLine>, event: RushEvent, direction: 1 | -1) => {
+    const line = { ...blankStatLine(), ...(stats[event.playerId] ?? {}) };
+    line.rushingCarries += direction; line.rushingYards += event.yards * direction;
+    line.rushingTd += (event.td ? 1 : 0) * direction; line.fumbles += (event.fumble ? 1 : 0) * direction;
+    stats[event.playerId] = line;
+  };
+  const resetRushForm = () => { setRushPlayerId(''); setRushYards(''); setRushTd(false); setRushFumble(false); setEditingRushId(''); };
+  const saveRushEvent = () => {
+    if (!selectedGame || !rushPlayerId || rushYards.trim() === '' || !Number.isFinite(Number(rushYards))) return;
+    const event: RushEvent = { id: editingRushId || 'rush-' + Date.now(), playerId: rushPlayerId, yards: Number(rushYards), td: rushTd, fumble: rushFumble };
+    setStore(current => ({ ...current, games: current.games.map(game => {
+      if (game.id !== selectedGame.id) return game;
+      const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+      const events = [...(game.rushEvents ?? [])]; const oldIndex = events.findIndex(item => item.id === event.id);
+      if (oldIndex >= 0) applyRushEvent(stats, events[oldIndex], -1); applyRushEvent(stats, event, 1);
+      if (oldIndex >= 0) events[oldIndex] = event; else events.push(event);
+      return { ...game, stats, rushEvents: events };
+    }) })); resetRushForm();
+  };
+  const editRushEvent = (event: RushEvent) => { setEditingRushId(event.id); setRushPlayerId(event.playerId); setRushYards(String(event.yards)); setRushTd(event.td); setRushFumble(event.fumble); };
+  const deleteRushEvent = (eventId: string) => {
+    if (!selectedGame || !window.confirm('Delete this rushing play and reverse its stats?')) return;
+    setStore(current => ({ ...current, games: current.games.map(game => {
+      if (game.id !== selectedGame.id) return game; const event = (game.rushEvents ?? []).find(item => item.id === eventId); if (!event) return game;
+      const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+      applyRushEvent(stats, event, -1); return { ...game, stats, rushEvents: (game.rushEvents ?? []).filter(item => item.id !== eventId) };
+    }) })); if (editingRushId === eventId) resetRushForm();
+  };
   const savePassEvent = () => {
     if (!selectedGame || !passQbId) return;
     if (passOutcome === 'complete' && (!passReceiverId || passYards.trim() === '' || !Number.isFinite(Number(passYards)))) return;
     const event: PassEvent = {
       id: editingPassId || 'pass-' + Date.now(),
-      qbId: passQbId, outcome: passOutcome,
-      receiverId: passOutcome === 'interception' ? '' : passReceiverId,
-      yards: passOutcome === 'complete' ? Number(passYards) : 0,
-      td: passOutcome === 'complete' && passTd,
+      qbId: passQbId, outcome: passInt ? 'interception' : passOutcome,
+      receiverId: passInt || passOutcome === 'interception' ? '' : passReceiverId,
+      yards: !passInt && passOutcome === 'complete' ? Number(passYards) : 0,
+      td: !passInt && passOutcome === 'complete' && passTd,
     };
     setStore(current => ({
       ...current,
@@ -1920,7 +1955,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   const editPassEvent = (event: PassEvent) => {
     setEditingPassId(event.id); setPassQbId(event.qbId); setPassOutcome(event.outcome);
     setPassReceiverId(event.receiverId); setPassYards(event.outcome === 'complete' ? String(event.yards) : '');
-    setPassTd(event.td);
+    setPassTd(event.td); setPassInt(event.outcome === 'interception');
   };
   const deletePassEvent = (eventId: string) => {
     if (!selectedGame || !window.confirm('Delete this pass play and reverse its stats?')) return;
@@ -2032,15 +2067,28 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
         <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
       </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
       {selectedGame && <>
+        {statGroup === 'Rushing' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
+<SectionTitle title={editingRushId ? 'Edit Rushing Play' : 'Record Rushing Play'} detail="Record each carry once. Carries, yards, touchdowns, and fumbles update automatically." />
+<div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, alignItems: 'end' }}>
+<div><label htmlFor="rush-player" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Runner</label><select id="rush-player" className="input" value={rushPlayerId} onChange={event => setRushPlayerId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select player</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
+<div><label htmlFor="rush-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="rush-yards" className="input" type="number" inputMode="numeric" step="1" value={rushYards} onChange={event => setRushYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={rushTd} onChange={event => setRushTd(event.target.checked)} /> TD</label>
+<label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={rushFumble} onChange={event => setRushFumble(event.target.checked)} /> Fumble</label>
+<button className="btn btn-primary" onClick={saveRushEvent} disabled={!rushPlayerId || rushYards.trim() === '' || !Number.isFinite(Number(rushYards))} style={{ minHeight: 44 }}>{editingRushId ? 'Save Changes' : 'Record Rush'}</button>
+{editingRushId && <button className="btn btn-ghost" onClick={resetRushForm} style={{ minHeight: 44 }}>Cancel Edit</button>}
+</div>
+{(selectedGame?.rushEvents ?? []).length > 0 && <div style={{ marginTop: 14, overflowX: 'auto' }}><strong style={{ display: 'block', marginBottom: 8 }}>Recorded Rushing Plays</strong><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left', padding: 6 }}>Runner</th><th style={{ textAlign: 'right', padding: 6 }}>Yds</th><th style={{ textAlign: 'left', padding: 6 }}>Result</th><th style={{ textAlign: 'right', padding: 6 }}>Actions</th></tr></thead><tbody>{(selectedGame?.rushEvents ?? []).map(event => { const runner = store.players.find(player => player.id === event.playerId); return <tr key={event.id} style={{ borderTop: '1px solid hsl(var(--border))' }}><td style={{ padding: 6 }}>#{runner?.jersey ?? '?'}</td><td style={{ padding: 6, textAlign: 'right' }}>{event.yards}</td><td style={{ padding: 6 }}>{[event.td ? 'TD' : '', event.fumble ? 'Fumble' : ''].filter(Boolean).join(' · ') || 'Run'}</td><td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}><button className="btn btn-ghost" onClick={() => editRushEvent(event)} style={{ minHeight: 34, padding: '4px 8px' }}>Edit</button> <button className="btn btn-ghost" onClick={() => deleteRushEvent(event.id)} style={{ minHeight: 34, padding: '4px 8px' }}>Delete</button></td></tr>; })}</tbody></table></div>}
+</div>}
         {statGroup === 'Pass / Receive' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
           <SectionTitle title={editingPassId ? 'Edit Pass Play' : 'Record Pass Play'} detail="Record each throw once. QB and receiver totals update automatically; saved plays can be edited or deleted." />
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, alignItems: 'end' }}>
             <div><label htmlFor="pass-qb" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>QB</label><select id="pass-qb" className="input" value={passQbId} onChange={event => setPassQbId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select QB</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
             <div><label htmlFor="pass-outcome" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Result</label><select id="pass-outcome" className="input" value={passOutcome} onChange={event => setPassOutcome(event.target.value as 'complete' | 'incomplete' | 'interception')} style={{ width: '100%', minHeight: 44 }}><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="interception">INT</option></select></div>
-            {passOutcome !== 'interception' && <div><label htmlFor="pass-receiver" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="pass-receiver" className="input" value={passReceiverId} onChange={event => setPassReceiverId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select receiver</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>}
-            {passOutcome === 'complete' && <div><label htmlFor="pass-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="pass-yards" className="input" type="number" inputMode="numeric" step="1" value={passYards} onChange={event => setPassYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>}
-            {passOutcome === 'complete' && <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passTd} onChange={event => setPassTd(event.target.checked)} /> TD</label>}
-            <button className="btn btn-primary" onClick={savePassEvent} disabled={!passQbId || (passOutcome === 'complete' && (!passReceiverId || passYards.trim() === ''))} style={{ minHeight: 44 }}>{editingPassId ? 'Save Changes' : 'Record Pass'}</button>
+            {!passInt && passOutcome !== 'interception' && <div><label htmlFor="pass-receiver" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="pass-receiver" className="input" value={passReceiverId} onChange={event => setPassReceiverId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select receiver</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>}
+            {!passInt && passOutcome === 'complete' && <div><label htmlFor="pass-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="pass-yards" className="input" type="number" inputMode="numeric" step="1" value={passYards} onChange={event => setPassYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>}
+            {!passInt && passOutcome === 'complete' && <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passTd} onChange={event => setPassTd(event.target.checked)} /> TD</label>}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passInt} onChange={event => { setPassInt(event.target.checked); if (event.target.checked) { setPassOutcome('incomplete'); setPassTd(false); } else if (passOutcome === 'incomplete') setPassOutcome('complete'); }} /> INT</label>
+            <button className="btn btn-primary" onClick={savePassEvent} disabled={!passQbId || (!passInt && passOutcome === 'complete' && (!passReceiverId || passYards.trim() === ''))} style={{ minHeight: 44 }}>{editingPassId ? 'Save Changes' : 'Record Pass'}</button>
             {editingPassId && <button className="btn btn-ghost" onClick={resetPassForm} style={{ minHeight: 44 }}>Cancel Edit</button>}
           </div>
           {(selectedGame?.passEvents ?? []).length > 0 && <div style={{ marginTop: 14, overflowX: 'auto' }}><strong style={{ display: 'block', marginBottom: 8 }}>Recorded Pass Plays</strong><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left', padding: 6 }}>QB</th><th style={{ textAlign: 'left', padding: 6 }}>Result</th><th style={{ textAlign: 'left', padding: 6 }}>Receiver</th><th style={{ textAlign: 'right', padding: 6 }}>Yds</th><th style={{ textAlign: 'right', padding: 6 }}>Actions</th></tr></thead><tbody>{(selectedGame?.passEvents ?? []).map((event, index) => { const qb = store.players.find(player => player.id === event.qbId); const receiver = store.players.find(player => player.id === event.receiverId); return <tr key={event.id} style={{ borderTop: '1px solid hsl(var(--border))' }}><td style={{ padding: 6 }}>#{qb?.jersey ?? '?'}</td><td style={{ padding: 6 }}>{event.outcome === 'complete' ? (event.td ? 'Complete · TD' : 'Complete') : event.outcome === 'incomplete' ? 'Incomplete' : 'INT'}</td><td style={{ padding: 6 }}>{receiver ? '#' + receiver.jersey : '—'}</td><td style={{ padding: 6, textAlign: 'right' }}>{event.outcome === 'complete' ? event.yards : '—'}</td><td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}><button className="btn btn-ghost" onClick={() => editPassEvent(event)} style={{ minHeight: 34, padding: '4px 8px' }}>Edit</button> <button className="btn btn-ghost" onClick={() => deletePassEvent(event.id)} style={{ minHeight: 34, padding: '4px 8px' }}>Delete</button></td></tr>; })}</tbody></table></div>}
