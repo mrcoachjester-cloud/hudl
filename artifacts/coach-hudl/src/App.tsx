@@ -564,27 +564,30 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
   const scoutingPlays = data.scouting;
   // Team identity and down efficiency always use this opponent's offensive scouting snaps,
   // independent of the visual phase filter below. Live Game rows are never included.
-  const opponentOffense = scoutingPlays.filter(play => normalizeOdk(play.odk) === 'O');
+  const identityPlays = phaseFilter === 'D'
+    ? scoutingPlays.filter(play => normalizeOdk(play.odk) === 'D')
+    : scoutingPlays.filter(play => normalizeOdk(play.odk) === 'O');
+  const identityDetail = phaseFilter === 'D' ? 'defensive scouting totals only' : 'offensive scouting totals only';
   const identityResult = (play: Play) => (play.result || '').toLowerCase();
   const teamIdentity = {
-    runAtt: opponentOffense.filter(play => play.type.toLowerCase().includes('run')).length,
-    runYds: opponentOffense.filter(play => play.type.toLowerCase().includes('run')).reduce((sum, play) => sum + num(play.gnls), 0),
-    passAtt: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).length,
-    passComp: opponentOffense.filter(play => {
+    runAtt: identityPlays.filter(play => play.type.toLowerCase().includes('run')).length,
+    runYds: identityPlays.filter(play => play.type.toLowerCase().includes('run')).reduce((sum, play) => sum + num(play.gnls), 0),
+    passAtt: identityPlays.filter(play => play.type.toLowerCase().includes('pass')).length,
+    passComp: identityPlays.filter(play => {
       const result = identityResult(play);
       return /\bcomplete(?:d)?\b/.test(result) && !/incomplete/.test(result);
     }).length,
-    passYds: opponentOffense.filter(play => play.type.toLowerCase().includes('pass')).reduce((sum, play) => sum + num(play.gnls), 0),
-    sacks: opponentOffense.filter(play => /\bsack(?:ed)?\b/.test(identityResult(play))).length,
-    tfl: opponentOffense.filter(play => /tackle for loss|\btfl\b/.test(identityResult(play))).length,
-    interceptions: opponentOffense.filter(play => /interception|\bint\b/.test(identityResult(play))).length,
-    fumbles: opponentOffense.filter(play => /fumble/.test(identityResult(play))).length,
-    touchdowns: opponentOffense.filter(play => /touchdown|\btd\b/.test(identityResult(play))).length,
-    rushTd: opponentOffense.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\btd\b/.test(identityResult(play))).length,
-    passTd: opponentOffense.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\btd\b/.test(identityResult(play))).length,
+    passYds: identityPlays.filter(play => play.type.toLowerCase().includes('pass')).reduce((sum, play) => sum + num(play.gnls), 0),
+    sacks: identityPlays.filter(play => /\bsack(?:ed)?\b/.test(identityResult(play))).length,
+    tfl: identityPlays.filter(play => /tackle for loss|\btfl\b/.test(identityResult(play))).length,
+    interceptions: identityPlays.filter(play => /interception|\bint\b/.test(identityResult(play))).length,
+    fumbles: identityPlays.filter(play => /fumble/.test(identityResult(play))).length,
+    touchdowns: identityPlays.filter(play => /touchdown|\btd\b/.test(identityResult(play))).length,
+    rushTd: identityPlays.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\btd\b/.test(identityResult(play))).length,
+    passTd: identityPlays.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\btd\b/.test(identityResult(play))).length,
   };
   const downEfficiency = ['1', '2', '3', '4'].map(down => {
-    const attempts = opponentOffense.filter(play => num(play.dn) === Number(down) && num(play.dist) > 0);
+    const attempts = identityPlays.filter(play => num(play.dn) === Number(down) && num(play.dist) > 0);
     const conversions = attempts.filter(play => num(play.gnls) >= num(play.dist) || /touchdown|\btd\b/.test(identityResult(play)));
     return { down, attempts: attempts.length, conversions: conversions.length, rate: attempts.length ? (conversions.length / attempts.length) * 100 : 0 };
   });
@@ -806,7 +809,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
       {/* Opponent identity + down efficiency: selected opponent scouting only */}
       <div className="grid dashboard-grid" style={{ marginBottom: 14 }}>
         <Panel style={{ gridColumn: '1 / -1' }}>
-          <SectionTitle title="Team identity" detail={`${activeOpponent} · offensive scouting totals only`} />
+          <SectionTitle title="Team identity" detail={`${activeOpponent} · ${identityDetail}`} />
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr>
@@ -826,7 +829,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
           </div>
         </Panel>
         <Panel style={{ gridColumn: '1 / -1' }}>
-          <SectionTitle title="Down efficiency" detail="Offensive snaps · conversion = gain reaches the line to gain or a touchdown" />
+          <SectionTitle title="Down efficiency" detail={`${phaseFilter === 'D' ? 'Defensive' : 'Offensive'} scouting snaps · conversion = gain reaches the line to gain or a touchdown`} />
           <div className="table-wrap">
             <table className="data-table">
               <thead><tr><th>DOWN</th><th>ATTEMPTS</th><th>CONVERSIONS</th><th>CONVERSION RATE</th></tr></thead>
