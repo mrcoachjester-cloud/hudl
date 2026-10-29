@@ -61,7 +61,7 @@ type Dataset = {
   gameData?: Record<string, { scouting: Play[]; live: Play[] }>;
 };
 
-type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule';
+type NavKey = '/' | '/upload' | '/scout' | '/live' | '/reports' | '/schedule' | '/player-stats';
 
 const STORAGE_KEY = 'coach-hudl-datasets-v2';
 const demoSchedule: ScheduleGame[] = [
@@ -342,6 +342,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
     { href: '/live', label: 'Live game', icon: Target },
     { href: '/reports', label: 'Reports', icon: ClipboardList },
     { href: '/schedule', label: 'Schedule', icon: FileSpreadsheet },
+    { href: '/player-stats', label: 'Player Stats', icon: BarChart3 },
   ];
 
   const totalPlays = data.scouting.length + data.live.length;
@@ -1775,6 +1776,182 @@ function ReportsHubPage({ data }: { data: Dataset }) {
   </div>;
 }
 
+
+type PlayerStatLine = {
+  rushingCarries: number; rushingYards: number; rushingTd: number; fumbles: number;
+  passAttempts: number; passCompletions: number; passYards: number; passTd: number; interceptions: number;
+  targets: number; receptions: number; receivingYards: number; receivingTd: number;
+};
+type StatsPlayer = { id: string; jersey: string; name: string };
+type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine> };
+type PlayerStatsStore = { players: StatsPlayer[]; games: StatsGame[] };
+const PLAYER_STATS_KEY = 'coach-hudl-independent-player-stats-v1';
+const blankStatLine = (): PlayerStatLine => ({
+  rushingCarries: 0, rushingYards: 0, rushingTd: 0, fumbles: 0,
+  passAttempts: 0, passCompletions: 0, passYards: 0, passTd: 0, interceptions: 0,
+  targets: 0, receptions: 0, receivingYards: 0, receivingTd: 0,
+});
+const loadPlayerStats = (): PlayerStatsStore => {
+  try {
+    const raw = localStorage.getItem(PLAYER_STATS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<PlayerStatsStore>;
+      return { players: Array.isArray(parsed.players) ? parsed.players : [], games: Array.isArray(parsed.games) ? parsed.games : [] };
+    }
+  } catch (error) { console.warn('Could not load independent player stats:', error); }
+  return { players: [], games: [] };
+};
+const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[] = [
+  { key: 'rushingCarries', label: 'Car', group: 'Rushing' }, { key: 'rushingYards', label: 'Yds', group: 'Rushing' },
+  { key: 'rushingTd', label: 'TD', group: 'Rushing' }, { key: 'fumbles', label: 'Fum', group: 'Rushing' },
+  { key: 'passAttempts', label: 'Att', group: 'Passing' }, { key: 'passCompletions', label: 'Comp', group: 'Passing' },
+  { key: 'passYards', label: 'Yds', group: 'Passing' }, { key: 'passTd', label: 'TD', group: 'Passing' },
+  { key: 'interceptions', label: 'INT', group: 'Passing' }, { key: 'targets', label: 'Tgt', group: 'Receiving' },
+  { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
+  { key: 'receivingTd', label: 'TD', group: 'Receiving' },
+];
+function PlayerStatsPage() {
+  const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
+  const [view, setView] = useState<'game' | 'season'>('game');
+  const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
+  const [newJersey, setNewJersey] = useState('');
+  const [newName, setNewName] = useState('');
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
+  const [showNewGame, setShowNewGame] = useState(false);
+  const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
+  useEffect(() => {
+    try { localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(store)); }
+    catch (error) { console.error('Could not save independent player stats:', error); }
+  }, [store]);
+  const selectedGame = store.games.find(game => game.id === selectedGameId) ?? store.games[0];
+  const displayedSeason = seasonView || selectedGame?.season || gameDraft.season;
+  const updateLine = (playerId: string, key: keyof PlayerStatLine, value: string) => {
+    if (!selectedGame) return;
+    const parsed = value.trim() === '' ? 0 : Number(value);
+    const safeValue = Number.isFinite(parsed) ? parsed : 0;
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => game.id !== selectedGame.id ? game : {
+        ...game, stats: { ...game.stats, [playerId]: { ...blankStatLine(), ...(game.stats[playerId] ?? {}), [key]: safeValue } }
+      })
+    }));
+  };
+  const addPlayer = () => {
+    const jersey = newJersey.trim();
+    if (!jersey) return;
+    const existing = store.players.find(player => player.jersey.toLowerCase() === jersey.toLowerCase());
+    if (existing) {
+      setNewJersey(''); setNewName(''); setShowQuickAdd(false);
+      return;
+    }
+    const player = { id: 'player-' + Date.now(), jersey, name: newName.trim() };
+    setStore(current => ({ ...current, players: [...current.players, player].sort((a,b) => a.jersey.localeCompare(b.jersey, undefined, { numeric: true })) }));
+    setNewJersey(''); setNewName(''); setShowQuickAdd(false);
+  };
+  const addGame = () => {
+    if (!gameDraft.season.trim() || !gameDraft.opponent.trim()) return;
+    const game: StatsGame = { id: 'stats-game-' + Date.now(), season: gameDraft.season.trim(), opponent: gameDraft.opponent.trim(), date: gameDraft.date, notes: '', stats: {} };
+    setStore(current => ({ ...current, games: [game, ...current.games] }));
+    setSelectedGameId(game.id);
+    setGameDraft(current => ({ ...current, opponent: '', date: '' }));
+    setShowNewGame(false); setView('game'); setSeasonView(game.season);
+  };
+  const updateGame = (patch: Partial<StatsGame>) => {
+    if (!selectedGame) return;
+    setStore(current => ({ ...current, games: current.games.map(game => game.id === selectedGame.id ? { ...game, ...patch } : game) }));
+  };
+  const seasonPlayers = store.players.map(player => {
+    const total = blankStatLine();
+    store.games.filter(game => game.season === displayedSeason).forEach(game => {
+      const line = game.stats[player.id];
+      if (line) statColumns.forEach(column => { total[column.key] += Number(line[column.key] || 0); });
+    });
+    return { player, total };
+  });
+  const inputStyle: CSSProperties = { width: '100%', minWidth: 48, boxSizing: 'border-box', padding: '7px 5px', border: '1px solid hsl(var(--border))', borderRadius: 5, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontSize: 13 };
+  const cellStyle: CSSProperties = { padding: '5px 6px', borderBottom: '1px solid hsl(var(--border))', textAlign: 'center', whiteSpace: 'nowrap' };
+  const statTable = (rows: { player: StatsPlayer; line: PlayerStatLine }[], editable: boolean) => (
+    <div style={{ overflowX: 'auto', border: '1px solid hsl(var(--border))', borderRadius: 9 }}>
+      <table style={{ width: '100%', minWidth: 1020, borderCollapse: 'collapse', fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: '#330066', color: '#fff' }}>
+            <th rowSpan={2} style={{ ...cellStyle, textAlign: 'left', minWidth: 155 }}>Jersey / Player</th>
+            {['Rushing','Passing','Receiving'].map(group => <th key={group} colSpan={statColumns.filter(column => column.group === group).length} style={{ ...cellStyle, fontWeight: 800 }}>{group.toUpperCase()}</th>)}
+          </tr>
+          <tr style={{ background: 'hsl(var(--muted))', color: 'hsl(var(--foreground))' }}>
+            {statColumns.map((column, index) => <th key={column.key + '-' + index} style={cellStyle}>{column.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ player, line }) => <tr key={player.id}>
+            <td style={{ ...cellStyle, textAlign: 'left', fontWeight: 650 }}>
+              <span style={{ display: 'inline-block', minWidth: 32, color: '#8055A5' }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
+            </td>
+            {statColumns.map((column, index) => <td key={column.key + '-' + index} style={{ ...cellStyle, minWidth: 58 }}>
+              {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 52 }} /> : (line[column.key] || 0)}
+            </td>)}
+          </tr>)}
+          {rows.length > 0 && <tr style={{ background: 'hsl(var(--muted))', fontWeight: 800 }}>
+            <td style={{ ...cellStyle, textAlign: 'left' }}>TOTAL</td>
+            {statColumns.map((column, index) => <td key={column.key + '-' + index} style={cellStyle}>{rows.reduce((sum, row) => sum + Number(row.line[column.key] || 0), 0)}</td>)}
+          </tr>}
+        </tbody>
+      </table>
+    </div>
+  );
+  const currentRows = store.players.map(player => ({ player, line: selectedGame?.stats[player.id] ?? blankStatLine() }));
+  return <div className="content">
+    <PageHead eyebrow="Standalone tool · player statistics" title="Player Stats" description="A spreadsheet-style stat sheet for individual offensive production. Independent of Live Game charting and Scouting." />
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
+      <button className={'button ' + (view === 'game' ? 'button-primary' : 'button-secondary')} onClick={() => setView('game')}>Game Stats</button>
+      <button className={'button ' + (view === 'season' ? 'button-primary' : 'button-secondary')} onClick={() => setView('season')}>Season Stats</button>
+      <div style={{ flex: 1 }} />
+      <button className="button button-secondary" onClick={() => setShowQuickAdd(value => !value)}><Plus size={16} /> Quick Add Player</button>
+      <button className="button button-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>
+    </div>
+    {showQuickAdd && <Panel><SectionTitle title="Quick add player" detail="Add a jersey number now, with an optional name. Existing jersey numbers are reused." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input className="input" aria-label="Jersey number" placeholder="Jersey number (required)" value={newJersey} onChange={event => setNewJersey(event.target.value)} style={{ maxWidth: 220 }} />
+      <input className="input" aria-label="Player name" placeholder="Player name (optional)" value={newName} onChange={event => setNewName(event.target.value)} style={{ maxWidth: 280 }} />
+      <button className="button button-primary" onClick={addPlayer}>Add Player</button>
+    </div></Panel>}
+    {showNewGame && <Panel><SectionTitle title="Start a stat sheet" detail="This game is created only inside Player Stats; it does not change Schedule." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <input className="input" aria-label="Stats season" placeholder="Season" value={gameDraft.season} onChange={event => setGameDraft({ ...gameDraft, season: event.target.value })} style={{ maxWidth: 130 }} />
+      <input className="input" aria-label="Stats opponent" placeholder="Opponent / game label" value={gameDraft.opponent} onChange={event => setGameDraft({ ...gameDraft, opponent: event.target.value })} style={{ maxWidth: 260 }} />
+      <input className="input" aria-label="Stats game date" type="date" value={gameDraft.date} onChange={event => setGameDraft({ ...gameDraft, date: event.target.value })} />
+      <button className="button button-primary" onClick={addGame}>Create Game</button>
+    </div></Panel>}
+    {view === 'game' ? <Panel>
+      <SectionTitle title="Game Stats" detail="Enter totals by player. Use the jersey number as a quick reference." />
+      {store.games.length > 0 ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <label htmlFor="player-stats-game" style={{ fontWeight: 700 }}>Game</label>
+        <select id="player-stats-game" className="input" value={selectedGame?.id ?? ''} onChange={event => setSelectedGameId(event.target.value)} style={{ maxWidth: 360 }}>
+          {store.games.map(game => <option key={game.id} value={game.id}>{game.season + ' · ' + game.opponent + (game.date ? ' · ' + game.date : '')}</option>)}
+        </select>
+        {selectedGame && <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>Independent stat sheet · {selectedGame.season}</span>}
+      </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Create a stat sheet to begin entering player totals.</p></div>}
+      {selectedGame && <>
+        <div style={{ marginBottom: 12 }}>
+          <label htmlFor="player-stats-notes" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Notes / special plays (optional)</label>
+          <textarea id="player-stats-notes" className="input" value={selectedGame.notes} onChange={event => updateGame({ notes: event.target.value })} placeholder="e.g. #28 reverse pass, fake punt pass..." rows={2} style={{ width: '100%', resize: 'vertical' }} />
+        </div>
+        {store.players.length ? statTable(currentRows, true) : <div className="empty"><Users size={24} /><p>Add roster players or use Quick Add Player to begin.</p></div>}
+      </>}
+    </Panel> : <Panel>
+      <SectionTitle title="Season Stats" detail={'Totals from saved Player Stats games in ' + displayedSeason + '. These are independent of other app data.'} />
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+        <label htmlFor="player-stats-season" style={{ fontWeight: 700 }}>Season</label>
+        <select id="player-stats-season" className="input" value={displayedSeason} onChange={event => setSeasonView(event.target.value)} style={{ maxWidth: 150 }}>
+          {Array.from(new Set([...store.games.map(game => game.season), gameDraft.season])).sort((a,b) => Number(b)-Number(a)).map(season => <option key={season} value={season}>{season}</option>)}
+        </select>
+        <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{store.games.filter(game => game.season === displayedSeason).length} saved games</span>
+      </div>
+      {store.players.length ? statTable(seasonPlayers.map(({ player, total }) => ({ player, line: total })), false) : <div className="empty"><Users size={24} /><p>Add players to start building season totals.</p></div>}
+    </Panel>}
+    <p style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12, marginTop: 12 }}>This first version saves independently in this browser. It does not read or modify Schedule, Live Game, Scouting, or Reports.</p>
+  </div>;
+}
+
 function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
   const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });
   const [showArchived, setShowArchived] = useState(false);
@@ -1997,6 +2174,7 @@ function Router() {
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
         <Route path="/reports"><ReportsHubPage data={data} /></Route>
         <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
+        <Route path="/player-stats"><PlayerStatsPage /></Route>
         <Route><NotFoundPage /></Route>
       </Switch>
     </AppShell>
