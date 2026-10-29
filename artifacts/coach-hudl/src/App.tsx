@@ -886,20 +886,33 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         <Panel>
           <SectionTitle title="Formation tendencies" detail="Package distribution & favorite call" />
           {formationStats.length ? (
-            <div className="feed">
+            <div className="feed formation-tendencies">
               {formationStats.map(f => (
-                <div className="feed-row" key={f.form}>
-                  <div className="feed-main">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                      <strong>{f.form}</strong>
-                      <span className="eyebrow" style={{ color: '#62dfae' }}>{f.runPct}% Run / {f.passPct}% Pass</span>
+                <div
+                  className="formation-tendency-row"
+                  key={f.form}
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'minmax(0, 1fr) auto',
+                    alignItems: 'center',
+                    columnGap: 12,
+                    rowGap: 4,
+                    padding: '10px 0',
+                    borderTop: '1px solid rgba(255,255,255,.055)',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3, color: '#eeeaf7' }}>{f.form}</strong>
+                    <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 10px', marginTop: 3, fontSize: 11, lineHeight: 1.4, color: 'hsl(var(--muted-foreground))' }}>
+                      <strong style={{ color: '#62dfae', fontSize: 11, whiteSpace: 'nowrap' }}>{f.runPct}% Run / {f.passPct}% Pass</strong>
+                      <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Primary call: <b>{f.topCall}</b></span>
+                      <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Avg gain: <b>{f.avg} yds</b></span>
                     </div>
-                    <span>Primary call: <b>{f.topCall}</b> · Avg gain: <b>{f.avg} yds</b></span>
-                    <div className="progress" style={{ marginTop: 6, height: 4 }}>
+                    <div className="progress" style={{ marginTop: 5, height: 3 }}>
                       <span style={{ width: `${f.runPct}%`, background: 'hsl(var(--accent))' }} />
                     </div>
                   </div>
-                  <span className="tag" style={{ marginLeft: 8 }}>{f.total} snaps</span>
+                  <span className="tag" style={{ whiteSpace: 'nowrap' }}>{f.total} snaps</span>
                 </div>
               ))}
             </div>
