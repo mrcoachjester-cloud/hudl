@@ -1818,6 +1818,9 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   const [newJersey, setNewJersey] = useState('');
   const [newName, setNewName] = useState('');
   const [showQuickAdd, setShowQuickAdd] = useState(false);
+  const [catchPlayerId, setCatchPlayerId] = useState('');
+  const [catchYards, setCatchYards] = useState('');
+  const [catchTd, setCatchTd] = useState(false);
   const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
   const [showNewGame, setShowNewGame] = useState(false);
   const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
@@ -1859,6 +1862,27 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
         ...game, stats: { ...game.stats, [playerId]: { ...blankStatLine(), ...(game.stats[playerId] ?? {}), [key]: safeValue } }
       })
     }));
+  };
+  const recordCatch = () => {
+    if (!selectedGame || !catchPlayerId || catchYards.trim() === '') return;
+    const yards = Number(catchYards);
+    if (!Number.isFinite(yards)) return;
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => {
+        if (game.id !== selectedGame.id) return game;
+        const previous = { ...blankStatLine(), ...(game.stats[catchPlayerId] ?? {}) };
+        return { ...game, stats: { ...game.stats, [catchPlayerId]: {
+          ...previous,
+          targets: previous.targets + 1,
+          receptions: previous.receptions + 1,
+          receivingYards: previous.receivingYards + yards,
+          receivingTd: previous.receivingTd + (catchTd ? 1 : 0),
+        } } };
+      }),
+    }));
+    setCatchYards('');
+    setCatchTd(false);
   };
   const addPlayer = () => {
     const jersey = newJersey.trim();
@@ -1955,6 +1979,15 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
         <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
       </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
       {selectedGame && <>
+        {statGroup === 'Receiving' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
+          <SectionTitle title="Record a Catch" detail="Enter each completed catch once. Receptions, targets, receiving yards, and touchdowns update automatically." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1.4fr) minmax(90px, 0.7fr) auto', gap: 8, alignItems: 'end' }}>
+            <div><label htmlFor="catch-player" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="catch-player" className="input" value={catchPlayerId} onChange={event => setCatchPlayerId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select player</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
+            <div><label htmlFor="catch-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="catch-yards" className="input" type="number" inputMode="numeric" step="1" value={catchYards} onChange={event => setCatchYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={catchTd} onChange={event => setCatchTd(event.target.checked)} /> TD</label>
+            <button className="btn btn-primary" onClick={recordCatch} disabled={!catchPlayerId || catchYards.trim() === ''} style={{ gridColumn: '1 / -1', minHeight: 44 }}>Record Catch</button>
+          </div>
+        </div>}
         <div style={{ marginBottom: 12 }}>
           <label htmlFor="player-stats-notes" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Notes / special plays (optional)</label>
           <textarea id="player-stats-notes" className="input" value={selectedGame.notes} onChange={event => updateGame({ notes: event.target.value })} placeholder="e.g. #28 reverse pass, fake punt pass..." rows={2} style={{ width: '100%', resize: 'vertical' }} />
