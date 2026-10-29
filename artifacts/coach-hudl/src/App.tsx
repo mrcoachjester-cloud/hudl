@@ -350,10 +350,17 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   return (
     <div className="app-shell">
       <aside className={`sidebar ${mobileOpen ? 'open' : ''}`}>
-        <div className="brand">
-          <div className="brand-mark">CC</div>
+        <div className="brand" aria-label="Ironclad Athletics">
+          <div className="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 40 44" role="img" focusable="false">
+              <path d="M20 2 36 8v13c0 9-6.5 16-16 21C10.5 37 4 30 4 21V8L20 2Z" fill="#101820" stroke="#168BFF" strokeWidth="2.5" />
+              <path d="M12 11h16v5h-5v15h-6V16h-5z" fill="#F4F7FB" />
+              <path d="M11 23c5-3 13-3 18 0" fill="none" stroke="#168BFF" strokeWidth="2" />
+              <path d="M16 22v4m4-5v5m4-4v4" stroke="#F4F7FB" strokeWidth="1.5" />
+            </svg>
+          </div>
           <div className="brand-name">
-            coach<span>Connect</span>
+            <strong>IRONCLAD</strong><span>ATHLETICS</span>
           </div>
         </div>
         <div className="nav-label eyebrow">Workspace</div>
@@ -389,7 +396,7 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
             <button className="mobile-menu" onClick={() => setMobileOpen(value => !value)} aria-label="Open navigation" data-testid="button-open-navigation">
               <Menu />
             </button>
-            <span>Coach Connect workspace</span>
+            <span>Ironclad Athletics workspace</span>
           </div>
 
           <div className="topbar-actions" style={{ gap: 10 }}>
