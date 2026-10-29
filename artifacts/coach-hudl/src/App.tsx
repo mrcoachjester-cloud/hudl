@@ -774,10 +774,10 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
 
       {/* Live Shift Alert Banner */}
       {hasLive && (
-        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(31, 201, 139, 0.06)', borderColor: 'rgba(31, 201, 139, 0.28)' }}>
+        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(22, 139, 255, 0.06)', borderColor: 'rgba(22, 139, 255, 0.28)' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(31, 201, 139, 0.18)', color: '#62dfae' }}>
+              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(22, 139, 255, 0.18)', color: '#9fcdf5' }}>
                 <Activity size={18} />
               </div>
               <div>
@@ -904,7 +904,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
                   <div style={{ minWidth: 0 }}>
                     <strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3, color: '#eeeaf7' }}>{f.form}</strong>
                     <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '3px 10px', marginTop: 3, fontSize: 11, lineHeight: 1.4, color: 'hsl(var(--muted-foreground))' }}>
-                      <strong style={{ color: '#62dfae', fontSize: 11, whiteSpace: 'nowrap' }}>{f.runPct}% Run / {f.passPct}% Pass</strong>
+                      <strong style={{ color: '#9fcdf5', fontSize: 11, whiteSpace: 'nowrap' }}>{f.runPct}% Run / {f.passPct}% Pass</strong>
                       <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Primary call: <b>{f.topCall}</b></span>
                       <span style={{ display: 'inline', margin: 0, fontSize: 11 }}>Avg gain: <b>{f.avg} yds</b></span>
                     </div>
@@ -974,7 +974,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
                       </td>
                       <td>{play.form}</td>
                       <td>{play.carrier}</td>
-                      <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>
+                      <td style={{ color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>
                         {num(play.gnls) > 0 ? `+${play.gnls}` : play.gnls}
                       </td>
                       <td>{play.result}</td>
@@ -1393,7 +1393,7 @@ function ScoutPage({ data }: { data: Dataset }) {
             <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span> <span style={{ marginLeft: 7 }}>{play.offPlay}</span></td>
             <td>{play.form}</td>
             <td>{play.dir}</td>
-            <td style={{ color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td style={{ color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>{play.gnls}</td>
             <td>{play.defense} · {play.scheme}</td>
           </tr>)}</tbody>
         </table></div> : <div className="empty"><Search size={28} /><h3>Nothing matches that filter</h3><p>Clear a dropdown or reset the filter block.</p></div>}
@@ -1514,7 +1514,7 @@ function ScoutPage({ data }: { data: Dataset }) {
             <td><strong>{play.offPlay}</strong></td>
             <td><span className={`tag ${scoutIsRun(play) ? 'green' : ''}`}>{play.type}</span></td>
             <td>{play.dir}</td>
-            <td style={scoutIsExplosive(play) ? { color: '#e8c886', fontWeight: 700 } : { color: num(play.gnls) >= 0 ? '#62dfae' : '#ef8f88' }}>{play.gnls}</td>
+            <td style={scoutIsExplosive(play) ? { color: '#e8c886', fontWeight: 700 } : { color: num(play.gnls) >= 0 ? '#9fcdf5' : '#ef8f88' }}>{play.gnls}</td>
             <td>{play.scheme}</td>
             <td>{play.backfield}</td>
             <td>{play.motion}</td>
@@ -1530,7 +1530,7 @@ function ScoutPage({ data }: { data: Dataset }) {
 function ReportsPage({ data }: { data: Dataset }) {
   const [active, setActive] = useState<'qb' | 'carrier' | 'explosive'>('qb'); const plays = data.scouting; const qbs = plays.filter(p => p.type.toLowerCase().includes('pass')); const carriers = Array.from(new Set(plays.map(p => p.carrier))).filter(Boolean).map(name => { const rows = plays.filter(p => p.carrier === name); return { name, count: rows.length, yards: rows.reduce((sum, p) => sum + num(p.gnls), 0), explosive: rows.filter(isExplosive).length }; }).sort((a, b) => b.yards - a.yards);
   const exportReport = () => { const headers = ['Play #', 'Type', 'Ball Carrier', 'Gain/Loss', 'Result', 'Formation', 'Play Call']; const rows = plays.map(p => [p.playNo, p.type, p.carrier, p.gnls, p.result, p.form, p.offPlay].map(csvCell).join(',')); download('coach-hudl-report.csv', [headers.join(','), ...rows].join('\n')); };
-  return <div className="content"><PageHead eyebrow="Reports · ready for the room" title="Make the call." description="Clean report views for the staff meeting, the sideline, and the next opponent." actions={<button className="btn btn-primary" onClick={exportReport} data-testid="button-export-report"><Download /> Export CSV</button>} /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, .8fr) minmax(0, 1.2fr)' }}><Panel><SectionTitle title="Report views" detail="Select a lens" /><div className="report-list"><button className={`report-card ${active === 'qb' ? 'active-report' : ''}`} onClick={() => setActive('qb')} data-testid="button-report-qb"><div className="report-info"><div className="report-icon"><Users size={16} /></div><div><h3>QB report</h3><p>Pass volume, RPOs, pressure</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('carrier')} data-testid="button-report-carrier"><div className="report-info"><div className="report-icon"><Zap size={16} /></div><div><h3>Ball-carrier report</h3><p>Usage, yardage, explosives</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('explosive')} data-testid="button-report-explosive"><div className="report-info"><div className="report-icon"><Sparkles size={16} /></div><div><h3>Explosive plays</h3><p>Every gain of 12+ yards</p></div></div><ChevronRight size={16} /></button></div><div className="callout" style={{ marginTop: 18 }}><Download />The export includes normalized fields from every charted snap, ready for a staff packet.</div></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={active === 'qb' ? 'Quarterback report' : active === 'carrier' ? 'Ball-carrier report' : 'Explosive-play report'} detail={`${plays.length} snaps in scouting board`} /></div>{active === 'qb' && <div className="panel-pad"><div className="grid kpi-grid" style={{ marginBottom: 22 }}><Kpi label="Pass attempts" value={String(qbs.length)} note="charted throws" /><Kpi label="Pass yards" value={String(qbs.reduce((sum, p) => sum + num(p.gnls), 0))} note="net charted gain" green /><Kpi label="Pressure" value={String(qbs.filter(p => false).length)} note="blitz-tagged" /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Call</th><th>Formation</th><th>Result</th><th>Gain</th></tr></thead><tbody>{qbs.map((p, i) => <tr key={i}><td><strong>{p.offPlay}</strong></td><td>{p.form}</td><td>{p.result}</td><td>{p.gnls}</td></tr>)}</tbody></table></div></div>}{active === 'carrier' && <div className="panel-pad"><div className="table-wrap"><table className="data-table"><thead><tr><th>Ball carrier</th><th>Touches</th><th>Total gain</th><th>Avg / touch</th><th>Explosives</th></tr></thead><tbody>{carriers.map(row => <tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.count}</td><td style={{ color: '#62dfae' }}>{row.yards}</td><td>{(row.yards / row.count).toFixed(1)}</td><td><span className="tag green">{row.explosive}</span></td></tr>)}</tbody></table></div></div>}{active === 'explosive' && <div className="panel-pad"><div className="feed">{plays.filter(isExplosive).sort((a, b) => num(b.gnls) - num(a.gnls)).map((p, i) => <div className="feed-row" key={i}><span className="feed-num">#{p.playNo}</span><div className="feed-main"><strong>{p.offPlay} · {p.result}</strong><span>{p.type} · {p.form} · {p.yardLn}</span></div><span className="tag green">+{p.gnls}</span></div>)}</div></div>}</Panel></div></div>;
+  return <div className="content"><PageHead eyebrow="Reports · ready for the room" title="Make the call." description="Clean report views for the staff meeting, the sideline, and the next opponent." actions={<button className="btn btn-primary" onClick={exportReport} data-testid="button-export-report"><Download /> Export CSV</button>} /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, .8fr) minmax(0, 1.2fr)' }}><Panel><SectionTitle title="Report views" detail="Select a lens" /><div className="report-list"><button className={`report-card ${active === 'qb' ? 'active-report' : ''}`} onClick={() => setActive('qb')} data-testid="button-report-qb"><div className="report-info"><div className="report-icon"><Users size={16} /></div><div><h3>QB report</h3><p>Pass volume, RPOs, pressure</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('carrier')} data-testid="button-report-carrier"><div className="report-info"><div className="report-icon"><Zap size={16} /></div><div><h3>Ball-carrier report</h3><p>Usage, yardage, explosives</p></div></div><ChevronRight size={16} /></button><button className="report-card" onClick={() => setActive('explosive')} data-testid="button-report-explosive"><div className="report-info"><div className="report-icon"><Sparkles size={16} /></div><div><h3>Explosive plays</h3><p>Every gain of 12+ yards</p></div></div><ChevronRight size={16} /></button></div><div className="callout" style={{ marginTop: 18 }}><Download />The export includes normalized fields from every charted snap, ready for a staff packet.</div></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={active === 'qb' ? 'Quarterback report' : active === 'carrier' ? 'Ball-carrier report' : 'Explosive-play report'} detail={`${plays.length} snaps in scouting board`} /></div>{active === 'qb' && <div className="panel-pad"><div className="grid kpi-grid" style={{ marginBottom: 22 }}><Kpi label="Pass attempts" value={String(qbs.length)} note="charted throws" /><Kpi label="Pass yards" value={String(qbs.reduce((sum, p) => sum + num(p.gnls), 0))} note="net charted gain" green /><Kpi label="Pressure" value={String(qbs.filter(p => false).length)} note="blitz-tagged" /></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Call</th><th>Formation</th><th>Result</th><th>Gain</th></tr></thead><tbody>{qbs.map((p, i) => <tr key={i}><td><strong>{p.offPlay}</strong></td><td>{p.form}</td><td>{p.result}</td><td>{p.gnls}</td></tr>)}</tbody></table></div></div>}{active === 'carrier' && <div className="panel-pad"><div className="table-wrap"><table className="data-table"><thead><tr><th>Ball carrier</th><th>Touches</th><th>Total gain</th><th>Avg / touch</th><th>Explosives</th></tr></thead><tbody>{carriers.map(row => <tr key={row.name}><td><strong>{row.name}</strong></td><td>{row.count}</td><td style={{ color: '#9fcdf5' }}>{row.yards}</td><td>{(row.yards / row.count).toFixed(1)}</td><td><span className="tag green">{row.explosive}</span></td></tr>)}</tbody></table></div></div>}{active === 'explosive' && <div className="panel-pad"><div className="feed">{plays.filter(isExplosive).sort((a, b) => num(b.gnls) - num(a.gnls)).map((p, i) => <div className="feed-row" key={i}><span className="feed-num">#{p.playNo}</span><div className="feed-main"><strong>{p.offPlay} · {p.result}</strong><span>{p.type} · {p.form} · {p.yardLn}</span></div><span className="tag green">+{p.gnls}</span></div>)}</div></div>}</Panel></div></div>;
 }
 
 function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
@@ -2034,7 +2034,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <div style={{ overflowX: 'auto' }}>
         <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
-            <tr style={{ background: '#330066', color: '#fff' }}>
+            <tr style={{ background: '#168BFF', color: '#fff' }}>
               <th style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', width: '30%', minWidth: 90 }}>Jersey / Player</th>
               {visibleColumns.map(column => <th key={column.key} style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, fontWeight: 800, padding: '8px 3px' }}>{column.label}</th>)}
             </tr>
@@ -2042,7 +2042,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
           <tbody>
             {rows.map(({ player, line }) => <tr key={player.id}>
               <td style={{ ...cellStyle, textAlign: 'left', fontWeight: 650, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
-                <span style={{ display: 'inline-block', color: '#8055A5', fontWeight: 800, marginRight: 5 }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
+                <span style={{ display: 'inline-block', color: '#58aaff', fontWeight: 800, marginRight: 5 }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
               </td>
               {visibleColumns.map(column => <td key={column.key} style={{ ...cellStyle, padding: '5px 3px' }}>
                 {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" inputMode="numeric" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 0, padding: '9px 2px', fontSize: 16, minHeight: 40 }} /> : (line[column.key] || 0)}
@@ -2085,7 +2085,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <SectionTitle title="Game Stats" detail={statGroup === 'Pass / Receive' ? 'Log each pass play above. The table below shows the automatically updated passing and receiving totals.' : 'Enter totals by player. Use the jersey number as a quick reference.'} />
       {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
         <span style={{ fontWeight: 750 }}>Selected above:</span>
-        <span style={{ color: '#8055A5', fontWeight: 750 }}>{activeTeamName}</span>
+        <span style={{ color: '#58aaff', fontWeight: 750 }}>{activeTeamName}</span>
         <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
       </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
       {selectedGame && <>
