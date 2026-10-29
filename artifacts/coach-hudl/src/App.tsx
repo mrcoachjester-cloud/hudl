@@ -1813,6 +1813,7 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
 function PlayerStatsPage({ data }: { data: Dataset }) {
   const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
   const [view, setView] = useState<'game' | 'season'>('game');
+  const [statGroup, setStatGroup] = useState<'Rushing' | 'Passing' | 'Receiving'>('Rushing');
   const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
   const [newJersey, setNewJersey] = useState('');
   const [newName, setNewName] = useState('');
@@ -1893,33 +1894,33 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   });
   const inputStyle: CSSProperties = { width: '100%', minWidth: 48, boxSizing: 'border-box', padding: '7px 5px', border: '1px solid hsl(var(--border))', borderRadius: 5, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontSize: 13 };
   const cellStyle: CSSProperties = { padding: '5px 6px', borderBottom: '1px solid hsl(var(--border))', textAlign: 'center', whiteSpace: 'nowrap' };
+  const visibleColumns = statColumns.filter(column => column.group === statGroup);
   const statTable = (rows: { player: StatsPlayer; line: PlayerStatLine }[], editable: boolean) => (
-    <div style={{ overflowX: 'auto', border: '1px solid hsl(var(--border))', borderRadius: 9 }}>
-      <table style={{ width: '100%', minWidth: 1020, borderCollapse: 'collapse', fontSize: 13 }}>
-        <thead>
-          <tr style={{ background: '#330066', color: '#fff' }}>
-            <th rowSpan={2} style={{ ...cellStyle, textAlign: 'left', minWidth: 155 }}>Jersey / Player</th>
-            {['Rushing','Passing','Receiving'].map(group => <th key={group} colSpan={statColumns.filter(column => column.group === group).length} style={{ ...cellStyle, fontWeight: 800 }}>{group.toUpperCase()}</th>)}
-          </tr>
-          <tr style={{ background: 'hsl(var(--muted))', color: 'hsl(var(--foreground))' }}>
-            {statColumns.map((column, index) => <th key={column.key + '-' + index} style={cellStyle}>{column.label}</th>)}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map(({ player, line }) => <tr key={player.id}>
-            <td style={{ ...cellStyle, textAlign: 'left', fontWeight: 650 }}>
-              <span style={{ display: 'inline-block', minWidth: 32, color: '#8055A5' }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
-            </td>
-            {statColumns.map((column, index) => <td key={column.key + '-' + index} style={{ ...cellStyle, minWidth: 58 }}>
-              {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 52 }} /> : (line[column.key] || 0)}
-            </td>)}
-          </tr>)}
-          {rows.length > 0 && <tr style={{ background: 'hsl(var(--muted))', fontWeight: 800 }}>
-            <td style={{ ...cellStyle, textAlign: 'left' }}>TOTAL</td>
-            {statColumns.map((column, index) => <td key={column.key + '-' + index} style={cellStyle}>{rows.reduce((sum, row) => sum + Number(row.line[column.key] || 0), 0)}</td>)}
-          </tr>}
-        </tbody>
-      </table>
+    <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, overflow: 'hidden' }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ background: '#330066', color: '#fff' }}>
+              <th style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, textAlign: 'left', width: '30%', minWidth: 90 }}>Jersey / Player</th>
+              {visibleColumns.map(column => <th key={column.key} style={{ ...cellStyle, position: 'sticky', top: 0, zIndex: 1, fontWeight: 800, padding: '8px 3px' }}>{column.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ player, line }) => <tr key={player.id}>
+              <td style={{ ...cellStyle, textAlign: 'left', fontWeight: 650, whiteSpace: 'normal', overflowWrap: 'anywhere' }}>
+                <span style={{ display: 'inline-block', color: '#8055A5', fontWeight: 800, marginRight: 5 }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
+              </td>
+              {visibleColumns.map(column => <td key={column.key} style={{ ...cellStyle, padding: '5px 3px' }}>
+                {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" inputMode="numeric" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 0, padding: '9px 2px', fontSize: 16, minHeight: 40 }} /> : (line[column.key] || 0)}
+              </td>)}
+            </tr>)}
+            {rows.length > 0 && <tr style={{ background: 'hsl(var(--muted))', fontWeight: 800 }}>
+              <td style={{ ...cellStyle, textAlign: 'left' }}>TOTAL</td>
+              {visibleColumns.map(column => <td key={column.key} style={cellStyle}>{rows.reduce((sum, row) => sum + Number(row.line[column.key] || 0), 0)}</td>)}
+            </tr>}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
   const currentRows = store.players.map(player => ({ player, line: selectedGame?.stats[player.id] ?? blankStatLine() }));
@@ -1943,6 +1944,9 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <input className="input" aria-label="Stats game date" type="date" value={gameDraft.date} onChange={event => setGameDraft({ ...gameDraft, date: event.target.value })} />
       <button className="btn btn-primary" onClick={addGame}>Create Game</button>
     </div></Panel>}
+    <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
+      {(['Rushing', 'Passing', 'Receiving'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
+    </div>
     {view === 'game' ? <Panel>
       <SectionTitle title="Game Stats" detail="Enter totals by player. Use the jersey number as a quick reference." />
       {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
