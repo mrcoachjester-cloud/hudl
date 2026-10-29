@@ -1904,28 +1904,28 @@ function PlayerStatsPage() {
   return <div className="content">
     <PageHead eyebrow="Standalone tool · player statistics" title="Player Stats" description="A spreadsheet-style stat sheet for individual offensive production. Independent of Live Game charting and Scouting." />
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
-      <button className={'button ' + (view === 'game' ? 'button-primary' : 'button-secondary')} onClick={() => setView('game')}>Game Stats</button>
-      <button className={'button ' + (view === 'season' ? 'button-primary' : 'button-secondary')} onClick={() => setView('season')}>Season Stats</button>
+      <button className={'btn ' + (view === 'game' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('game')}>Game Stats</button>
+      <button className={'btn ' + (view === 'season' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('season')}>Season Stats</button>
       <div style={{ flex: 1 }} />
-      <button className="button button-secondary" onClick={() => setShowQuickAdd(value => !value)}><Plus size={16} /> Quick Add Player</button>
-      <button className="button button-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>
+      <button className="btn btn-ghost" onClick={() => setShowQuickAdd(value => !value)}><Plus size={16} /> Quick Add Player</button>
+      <button className="btn btn-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>
     </div>
     {showQuickAdd && <Panel><SectionTitle title="Quick add player" detail="Add a jersey number now, with an optional name. Existing jersey numbers are reused." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <input className="input" aria-label="Jersey number" placeholder="Jersey number (required)" value={newJersey} onChange={event => setNewJersey(event.target.value)} style={{ maxWidth: 220 }} />
       <input className="input" aria-label="Player name" placeholder="Player name (optional)" value={newName} onChange={event => setNewName(event.target.value)} style={{ maxWidth: 280 }} />
-      <button className="button button-primary" onClick={addPlayer}>Add Player</button>
+      <button className="btn btn-primary" onClick={addPlayer}>Add Player</button>
     </div></Panel>}
     {showNewGame && <Panel><SectionTitle title="Start a stat sheet" detail="This game is created only inside Player Stats; it does not change Schedule." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <input className="input" aria-label="Stats season" placeholder="Season" value={gameDraft.season} onChange={event => setGameDraft({ ...gameDraft, season: event.target.value })} style={{ maxWidth: 130 }} />
       <input className="input" aria-label="Stats opponent" placeholder="Opponent / game label" value={gameDraft.opponent} onChange={event => setGameDraft({ ...gameDraft, opponent: event.target.value })} style={{ maxWidth: 260 }} />
       <input className="input" aria-label="Stats game date" type="date" value={gameDraft.date} onChange={event => setGameDraft({ ...gameDraft, date: event.target.value })} />
-      <button className="button button-primary" onClick={addGame}>Create Game</button>
+      <button className="btn btn-primary" onClick={addGame}>Create Game</button>
     </div></Panel>}
     {view === 'game' ? <Panel>
       <SectionTitle title="Game Stats" detail="Enter totals by player. Use the jersey number as a quick reference." />
       {store.games.length > 0 ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
         <label htmlFor="player-stats-game" style={{ fontWeight: 700 }}>Game</label>
-        <select id="player-stats-game" className="input" value={selectedGame?.id ?? ''} onChange={event => setSelectedGameId(event.target.value)} style={{ maxWidth: 360 }}>
+        <select id="player-stats-game" className="input" value={selectedGame?.id ?? ''} onChange={event => { setSelectedGameId(event.target.value); const nextGame = store.games.find(game => game.id === event.target.value); if (nextGame) setSeasonView(nextGame.season); }} style={{ maxWidth: 360 }}>
           {store.games.map(game => <option key={game.id} value={game.id}>{game.season + ' · ' + game.opponent + (game.date ? ' · ' + game.date : '')}</option>)}
         </select>
         {selectedGame && <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>Independent stat sheet · {selectedGame.season}</span>}
