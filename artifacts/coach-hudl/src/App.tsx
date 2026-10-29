@@ -319,7 +319,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       targetPlays = { scouting: scoutingPlays, live: livePlays };
     } else if (!targetPlays) {
       targetPlays = { scouting: gameId === demoSchedule[0].id ? demoScouting : [], live: [] };
-    }    setData({
+    }
+    setData({
       ...data,
       activeGameId: gameId,
       scouting: targetPlays.scouting,
