@@ -1930,7 +1930,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <button className={'btn ' + (view === 'season' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('season')}>Season Stats</button>
       <div style={{ flex: 1 }} />
       <button className="btn btn-ghost" onClick={() => setShowQuickAdd(value => !value)}><Plus size={16} /> Quick Add Player</button>
-      <button className="btn btn-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>
+      {!activeTeamName && <button className="btn btn-primary" onClick={() => setShowNewGame(value => !value)}><Plus size={16} /> New Game</button>}
     </div>
     {showQuickAdd && <Panel><SectionTitle title="Quick add player" detail="Add a jersey number now, with an optional name. Existing jersey numbers are reused." /><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <input className="input" aria-label="Jersey number" placeholder="Jersey number (required)" value={newJersey} onChange={event => setNewJersey(event.target.value)} style={{ maxWidth: 220 }} />
