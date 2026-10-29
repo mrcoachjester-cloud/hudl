@@ -1783,7 +1783,8 @@ type PlayerStatLine = {
   targets: number; receptions: number; receivingYards: number; receivingTd: number;
 };
 type StatsPlayer = { id: string; jersey: string; name: string };
-type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine> };
+type PassEvent = { id: string; qbId: string; outcome: 'complete' | 'incomplete' | 'interception'; receiverId: string; yards: number; td: boolean };
+type StatsGame = { id: string; season: string; opponent: string; date: string; notes: string; stats: Record<string, PlayerStatLine>; passEvents?: PassEvent[] };
 type PlayerStatsStore = { players: StatsPlayer[]; games: StatsGame[] };
 const PLAYER_STATS_KEY = 'coach-hudl-independent-player-stats-v1';
 const blankStatLine = (): PlayerStatLine => ({
@@ -1813,7 +1814,7 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
 function PlayerStatsPage({ data }: { data: Dataset }) {
   const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
   const [view, setView] = useState<'game' | 'season'>('game');
-  const [statGroup, setStatGroup] = useState<'Rushing' | 'Passing' | 'Receiving'>('Rushing');
+  const [statGroup, setStatGroup] = useState<'Rushing' | 'Pass / Receive'>('Rushing');
   const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
   const [newJersey, setNewJersey] = useState('');
   const [newName, setNewName] = useState('');
@@ -1821,6 +1822,12 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   const [catchPlayerId, setCatchPlayerId] = useState('');
   const [catchYards, setCatchYards] = useState('');
   const [catchTd, setCatchTd] = useState(false);
+  const [passQbId, setPassQbId] = useState('');
+  const [passOutcome, setPassOutcome] = useState<'complete' | 'incomplete' | 'interception'>('complete');
+  const [passReceiverId, setPassReceiverId] = useState('');
+  const [passYards, setPassYards] = useState('');
+  const [passTd, setPassTd] = useState(false);
+  const [editingPassId, setEditingPassId] = useState('');
   const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
   const [showNewGame, setShowNewGame] = useState(false);
   const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
@@ -1863,26 +1870,72 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       })
     }));
   };
-  const recordCatch = () => {
-    if (!selectedGame || !catchPlayerId || catchYards.trim() === '') return;
-    const yards = Number(catchYards);
-    if (!Number.isFinite(yards)) return;
+  const applyPassEvent = (stats: Record<string, PlayerStatLine>, event: PassEvent, direction: 1 | -1) => {
+    const add = (playerId: string, changes: Partial<PlayerStatLine>) => {
+      if (!playerId) return;
+      const line = { ...blankStatLine(), ...(stats[playerId] ?? {}) };
+      (Object.keys(changes) as (keyof PlayerStatLine)[]).forEach(key => { line[key] += Number(changes[key] || 0) * direction; });
+      stats[playerId] = line;
+    };
+    add(event.qbId, {
+      passAttempts: 1, passCompletions: event.outcome === 'complete' ? 1 : 0,
+      passYards: event.outcome === 'complete' ? event.yards : 0,
+      passTd: event.outcome === 'complete' && event.td ? 1 : 0,
+      interceptions: event.outcome === 'interception' ? 1 : 0,
+    });
+    if (event.outcome !== 'interception' && event.receiverId) {
+      add(event.receiverId, {
+        targets: 1, receptions: event.outcome === 'complete' ? 1 : 0,
+        receivingYards: event.outcome === 'complete' ? event.yards : 0,
+        receivingTd: event.outcome === 'complete' && event.td ? 1 : 0,
+      });
+    }
+  };
+  const resetPassForm = () => { setPassYards(''); setPassTd(false); setEditingPassId(''); };
+  const savePassEvent = () => {
+    if (!selectedGame || !passQbId) return;
+    if (passOutcome === 'complete' && (!passReceiverId || passYards.trim() === '' || !Number.isFinite(Number(passYards)))) return;
+    const event: PassEvent = {
+      id: editingPassId || 'pass-' + Date.now(),
+      qbId: passQbId, outcome: passOutcome,
+      receiverId: passOutcome === 'interception' ? '' : passReceiverId,
+      yards: passOutcome === 'complete' ? Number(passYards) : 0,
+      td: passOutcome === 'complete' && passTd,
+    };
     setStore(current => ({
       ...current,
       games: current.games.map(game => {
         if (game.id !== selectedGame.id) return game;
-        const previous = { ...blankStatLine(), ...(game.stats[catchPlayerId] ?? {}) };
-        return { ...game, stats: { ...game.stats, [catchPlayerId]: {
-          ...previous,
-          targets: previous.targets + 1,
-          receptions: previous.receptions + 1,
-          receivingYards: previous.receivingYards + yards,
-          receivingTd: previous.receivingTd + (catchTd ? 1 : 0),
-        } } };
+        const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+        const events = [...(game.passEvents ?? [])];
+        const existingIndex = events.findIndex(item => item.id === event.id);
+        if (existingIndex >= 0) applyPassEvent(stats, events[existingIndex], -1);
+        applyPassEvent(stats, event, 1);
+        if (existingIndex >= 0) events[existingIndex] = event; else events.push(event);
+        return { ...game, stats, passEvents: events };
       }),
     }));
-    setCatchYards('');
-    setCatchTd(false);
+    resetPassForm();
+  };
+  const editPassEvent = (event: PassEvent) => {
+    setEditingPassId(event.id); setPassQbId(event.qbId); setPassOutcome(event.outcome);
+    setPassReceiverId(event.receiverId); setPassYards(event.outcome === 'complete' ? String(event.yards) : '');
+    setPassTd(event.td);
+  };
+  const deletePassEvent = (eventId: string) => {
+    if (!selectedGame || !window.confirm('Delete this pass play and reverse its stats?')) return;
+    setStore(current => ({
+      ...current,
+      games: current.games.map(game => {
+        if (game.id !== selectedGame.id) return game;
+        const event = (game.passEvents ?? []).find(item => item.id === eventId);
+        if (!event) return game;
+        const stats = Object.fromEntries(Object.entries(game.stats).map(([id, line]) => [id, { ...blankStatLine(), ...line }])) as Record<string, PlayerStatLine>;
+        applyPassEvent(stats, event, -1);
+        return { ...game, stats, passEvents: (game.passEvents ?? []).filter(item => item.id !== eventId) };
+      }),
+    }));
+    if (editingPassId === eventId) resetPassForm();
   };
   const addPlayer = () => {
     const jersey = newJersey.trim();
@@ -1918,7 +1971,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   });
   const inputStyle: CSSProperties = { width: '100%', minWidth: 48, boxSizing: 'border-box', padding: '7px 5px', border: '1px solid hsl(var(--border))', borderRadius: 5, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontSize: 13 };
   const cellStyle: CSSProperties = { padding: '5px 6px', borderBottom: '1px solid hsl(var(--border))', textAlign: 'center', whiteSpace: 'nowrap' };
-  const visibleColumns = statColumns.filter(column => column.group === statGroup);
+  const visibleColumns = statColumns.filter(column => statGroup === 'Pass / Receive' ? ['Passing', 'Receiving'].includes(column.group) : column.group === statGroup);
   const statTable = (rows: { player: StatsPlayer; line: PlayerStatLine }[], editable: boolean) => (
     <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, overflow: 'hidden' }}>
       <div style={{ overflowX: 'auto' }}>
@@ -1969,24 +2022,28 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <button className="btn btn-primary" onClick={addGame}>Create Game</button>
     </div></Panel>}
     <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
-      {(['Rushing', 'Passing', 'Receiving'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
+      {(['Rushing', 'Pass / Receive'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
     </div>
     {view === 'game' ? <Panel>
-      <SectionTitle title="Game Stats" detail="Enter totals by player. Use the jersey number as a quick reference." />
+      <SectionTitle title="Game Stats" detail={statGroup === 'Pass / Receive' ? 'Log each pass play above. The table below shows the automatically updated passing and receiving totals.' : 'Enter totals by player. Use the jersey number as a quick reference.'} />
       {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
         <span style={{ fontWeight: 750 }}>Selected above:</span>
         <span style={{ color: '#8055A5', fontWeight: 750 }}>{activeTeamName}</span>
         <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
       </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
       {selectedGame && <>
-        {statGroup === 'Receiving' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
-          <SectionTitle title="Record a Catch" detail="Enter each completed catch once. Receptions, targets, receiving yards, and touchdowns update automatically." />
-          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(120px, 1.4fr) minmax(90px, 0.7fr) auto', gap: 8, alignItems: 'end' }}>
-            <div><label htmlFor="catch-player" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="catch-player" className="input" value={catchPlayerId} onChange={event => setCatchPlayerId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select player</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
-            <div><label htmlFor="catch-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="catch-yards" className="input" type="number" inputMode="numeric" step="1" value={catchYards} onChange={event => setCatchYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={catchTd} onChange={event => setCatchTd(event.target.checked)} /> TD</label>
-            <button className="btn btn-primary" onClick={recordCatch} disabled={!catchPlayerId || catchYards.trim() === ''} style={{ gridColumn: '1 / -1', minHeight: 44 }}>Record Catch</button>
+        {statGroup === 'Pass / Receive' && store.players.length > 0 && <div style={{ border: '1px solid hsl(var(--border))', borderRadius: 9, padding: 12, marginBottom: 12 }}>
+          <SectionTitle title={editingPassId ? 'Edit Pass Play' : 'Record Pass Play'} detail="Record each throw once. QB and receiver totals update automatically; saved plays can be edited or deleted." />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 8, alignItems: 'end' }}>
+            <div><label htmlFor="pass-qb" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>QB</label><select id="pass-qb" className="input" value={passQbId} onChange={event => setPassQbId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select QB</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>
+            <div><label htmlFor="pass-outcome" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Result</label><select id="pass-outcome" className="input" value={passOutcome} onChange={event => setPassOutcome(event.target.value as 'complete' | 'incomplete' | 'interception')} style={{ width: '100%', minHeight: 44 }}><option value="complete">Complete</option><option value="incomplete">Incomplete</option><option value="interception">INT</option></select></div>
+            {passOutcome !== 'interception' && <div><label htmlFor="pass-receiver" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Receiver</label><select id="pass-receiver" className="input" value={passReceiverId} onChange={event => setPassReceiverId(event.target.value)} style={{ width: '100%', minHeight: 44 }}><option value="">Select receiver</option>{store.players.map(player => <option key={player.id} value={player.id}>#{player.jersey}{player.name ? ' · ' + player.name : ''}</option>)}</select></div>}
+            {passOutcome === 'complete' && <div><label htmlFor="pass-yards" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Yards</label><input id="pass-yards" className="input" type="number" inputMode="numeric" step="1" value={passYards} onChange={event => setPassYards(event.target.value)} placeholder="0" style={{ width: '100%', minHeight: 44 }} /></div>}
+            {passOutcome === 'complete' && <label style={{ display: 'flex', alignItems: 'center', gap: 6, minHeight: 44, fontSize: 13, fontWeight: 700 }}><input type="checkbox" checked={passTd} onChange={event => setPassTd(event.target.checked)} /> TD</label>}
+            <button className="btn btn-primary" onClick={savePassEvent} disabled={!passQbId || (passOutcome === 'complete' && (!passReceiverId || passYards.trim() === ''))} style={{ minHeight: 44 }}>{editingPassId ? 'Save Changes' : 'Record Pass'}</button>
+            {editingPassId && <button className="btn btn-ghost" onClick={resetPassForm} style={{ minHeight: 44 }}>Cancel Edit</button>}
           </div>
+          {(selectedGame?.passEvents ?? []).length > 0 && <div style={{ marginTop: 14, overflowX: 'auto' }}><strong style={{ display: 'block', marginBottom: 8 }}>Recorded Pass Plays</strong><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th style={{ textAlign: 'left', padding: 6 }}>QB</th><th style={{ textAlign: 'left', padding: 6 }}>Result</th><th style={{ textAlign: 'left', padding: 6 }}>Receiver</th><th style={{ textAlign: 'right', padding: 6 }}>Yds</th><th style={{ textAlign: 'right', padding: 6 }}>Actions</th></tr></thead><tbody>{(selectedGame?.passEvents ?? []).map((event, index) => { const qb = store.players.find(player => player.id === event.qbId); const receiver = store.players.find(player => player.id === event.receiverId); return <tr key={event.id} style={{ borderTop: '1px solid hsl(var(--border))' }}><td style={{ padding: 6 }}>#{qb?.jersey ?? '?'}</td><td style={{ padding: 6 }}>{event.outcome === 'complete' ? (event.td ? 'Complete · TD' : 'Complete') : event.outcome === 'incomplete' ? 'Incomplete' : 'INT'}</td><td style={{ padding: 6 }}>{receiver ? '#' + receiver.jersey : '—'}</td><td style={{ padding: 6, textAlign: 'right' }}>{event.outcome === 'complete' ? event.yards : '—'}</td><td style={{ padding: 6, textAlign: 'right', whiteSpace: 'nowrap' }}><button className="btn btn-ghost" onClick={() => editPassEvent(event)} style={{ minHeight: 34, padding: '4px 8px' }}>Edit</button> <button className="btn btn-ghost" onClick={() => deletePassEvent(event.id)} style={{ minHeight: 34, padding: '4px 8px' }}>Delete</button></td></tr>; })}</tbody></table></div>}
         </div>}
         <div style={{ marginBottom: 12 }}>
           <label htmlFor="player-stats-notes" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Notes / special plays (optional)</label>
