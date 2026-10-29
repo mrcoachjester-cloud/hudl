@@ -1810,7 +1810,7 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
   { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
   { key: 'receivingTd', label: 'TD', group: 'Receiving' },
 ];
-function PlayerStatsPage() {
+function PlayerStatsPage({ data }: { data: Dataset }) {
   const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
   const [view, setView] = useState<'game' | 'season'>('game');
   const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
@@ -1820,12 +1820,34 @@ function PlayerStatsPage() {
   const [gameDraft, setGameDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '' });
   const [showNewGame, setShowNewGame] = useState(false);
   const [seasonView, setSeasonView] = useState(String(new Date().getFullYear()));
+  const activeScheduleGame = data.schedule.find(game => game.id === data.activeGameId);
+  const activeTeamName = (data.activeTeam || activeScheduleGame?.opponent || '').trim();
+  const activeSeason = activeScheduleGame?.season || seasonView || String(new Date().getFullYear());
   useEffect(() => {
     try { localStorage.setItem(PLAYER_STATS_KEY, JSON.stringify(store)); }
     catch (error) { console.error('Could not save independent player stats:', error); }
   }, [store]);
-  const selectedGame = store.games.find(game => game.id === selectedGameId) ?? store.games[0];
-  const displayedSeason = seasonView || selectedGame?.season || gameDraft.season;
+  const selectedGame = activeTeamName
+    ? store.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase())
+    : (store.games.find(game => game.id === selectedGameId) ?? store.games[0]);
+  useEffect(() => {
+    if (!activeTeamName) return;
+    const existing = store.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase());
+    if (existing) {
+      setSelectedGameId(existing.id);
+      setSeasonView(activeSeason);
+      return;
+    }
+    const created: StatsGame = { id: 'stats-game-' + Date.now(), season: activeSeason, opponent: activeTeamName, date: activeScheduleGame?.date ?? '', notes: '', stats: {} };
+    setStore(current => {
+      const match = current.games.find(game => game.season === activeSeason && game.opponent.trim().toLowerCase() === activeTeamName.toLowerCase());
+      if (match) { setSelectedGameId(match.id); return current; }
+      setSelectedGameId(created.id);
+      return { ...current, games: [created, ...current.games] };
+    });
+    setSeasonView(activeSeason);
+  }, [activeTeamName, activeSeason, activeScheduleGame?.id]);
+  const displayedSeason = view === 'season' ? seasonView : (selectedGame?.season || activeSeason || gameDraft.season);
   const updateLine = (playerId: string, key: keyof PlayerStatLine, value: string) => {
     if (!selectedGame) return;
     const parsed = value.trim() === '' ? 0 : Number(value);
@@ -1923,13 +1945,11 @@ function PlayerStatsPage() {
     </div></Panel>}
     {view === 'game' ? <Panel>
       <SectionTitle title="Game Stats" detail="Enter totals by player. Use the jersey number as a quick reference." />
-      {store.games.length > 0 ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        <label htmlFor="player-stats-game" style={{ fontWeight: 700 }}>Game</label>
-        <select id="player-stats-game" className="input" value={selectedGame?.id ?? ''} onChange={event => { setSelectedGameId(event.target.value); const nextGame = store.games.find(game => game.id === event.target.value); if (nextGame) setSeasonView(nextGame.season); }} style={{ maxWidth: 360 }}>
-          {store.games.map(game => <option key={game.id} value={game.id}>{game.season + ' · ' + game.opponent + (game.date ? ' · ' + game.date : '')}</option>)}
-        </select>
-        {selectedGame && <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>Independent stat sheet · {selectedGame.season}</span>}
-      </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Create a stat sheet to begin entering player totals.</p></div>}
+      {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
+        <span style={{ fontWeight: 750 }}>Selected above:</span>
+        <span style={{ color: '#8055A5', fontWeight: 750 }}>{activeTeamName}</span>
+        <span style={{ color: 'hsl(var(--muted-foreground))', fontSize: 12 }}>{activeSeason} · Independent stat sheet</span>
+      </div> : <div className="empty"><FileSpreadsheet size={24} /><p>Select a team in the top bar, or create a stat sheet manually.</p></div>}
       {selectedGame && <>
         <div style={{ marginBottom: 12 }}>
           <label htmlFor="player-stats-notes" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>Notes / special plays (optional)</label>
@@ -2174,7 +2194,7 @@ function Router() {
         <Route path="/live"><LiveSpreadsheetPage data={data} setData={setData} /></Route>
         <Route path="/reports"><ReportsHubPage data={data} /></Route>
         <Route path="/schedule"><SchedulePage data={data} setData={setData} /></Route>
-        <Route path="/player-stats"><PlayerStatsPage /></Route>
+        <Route path="/player-stats"><PlayerStatsPage data={data} /></Route>
         <Route><NotFoundPage /></Route>
       </Switch>
     </AppShell>
