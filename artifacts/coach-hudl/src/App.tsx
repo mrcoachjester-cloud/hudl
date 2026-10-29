@@ -2021,7 +2021,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <input className="input" aria-label="Stats game date" type="date" value={gameDraft.date} onChange={event => setGameDraft({ ...gameDraft, date: event.target.value })} />
       <button className="btn btn-primary" onClick={addGame}>Create Game</button>
     </div></Panel>}
-    <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
+    <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
       {(['Rushing', 'Pass / Receive'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
     </div>
     {view === 'game' ? <Panel>
