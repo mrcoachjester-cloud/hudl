@@ -1,10 +1,10 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, createGame, createLivePlay, createScoutingSession, deleteLivePlayByNumber, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, updateLivePlayByNumber, type StandardPlay } from './lib/footballData';
 import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
 import { standardPlaysToHudlCsv, hudlCsvFilename } from './lib/hudlCsvExport';
-import { downloadScoutingPresentation, type PresentationMeta } from './lib/scoutingPresentation';
+import { downloadWeeklyScoutingReport } from './lib/weeklyScoutingReport';
 import {
   Activity,
   AlertTriangle,
@@ -233,6 +233,8 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
   const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
   const [teamOptions, setTeamOptions] = useState<string[]>([]);
   const activeTeam = data.activeTeam ?? activeGame?.opponent ?? '';
+  // Ignore out-of-order team changes so an older Supabase response cannot overwrite the latest selection.
+  const teamSelectionRequest = useRef(0);
 
   const seasons = Array.from(new Set(data.schedule.map(game => game.season)))
     .sort((a, b) => Number(b) - Number(a));
@@ -258,23 +260,64 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
 
   const selectTeam = async (team: string) => {
     const normalizedTeam = team.trim();
-    if (!normalizedTeam || normalizedTeam === activeTeam) return;
+    if (!normalizedTeam) return;
     const teamGame = seasonGames.find(game => game.opponent.trim().toLowerCase() === normalizedTeam.toLowerCase());
-    try {
-      const scouting = await getScoutingPlaysForTeam(activeSeason, normalizedTeam);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({
-        ...data,
-        activeTeam: normalizedTeam,
-        activeGameId: teamGame?.id ?? data.activeGameId,
-        scouting,
-        live,
+
+    // A team name can still match while the active game ID is blank or stale.
+    // Only skip the selection when both the team and its scheduled game are already active.
+    if (
+      normalizedTeam.toLowerCase() === activeTeam.trim().toLowerCase() &&
+      (teamGame?.id ?? '') === data.activeGameId
+    ) return;
+
+    const requestId = ++teamSelectionRequest.current;
+
+    // Commit the selection immediately. Otherwise the UI can still hold the previous
+    // game's ID while the scouting/live requests are in flight, making CSV import
+    // intermittently target the wrong game or report that no game is selected.
+    const selectionData: Dataset = {
+      ...data,
+      activeTeam: normalizedTeam,
+      activeGameId: teamGame?.id ?? '',
+      scouting: [],
+      live: [],
+      gameData: {
+        ...(data.gameData || {}),
+        ...(teamGame ? { [teamGame.id]: { scouting: [], live: [] } } : {}),
+      },
+    };
+    setData(selectionData);
+
+    const scoutingPromise = getScoutingPlaysForTeam(activeSeason, normalizedTeam)
+      .catch(error => {
+        console.error('Could not load team scouting data:', error);
+        return [] as Play[];
       });
-    } catch (error) {
-      console.error('Could not load team scouting data:', error);
-      const live = teamGame ? (data.gameData?.[teamGame.id]?.live ?? []) : [];
-      setData({ ...data, activeTeam: normalizedTeam, activeGameId: teamGame?.id ?? data.activeGameId, live });
+
+    let live: Play[] = [];
+    if (teamGame && isSupabaseConfigured) {
+      try {
+        live = (await getLivePlays(teamGame.id)).map(livePlayToStandard);
+      } catch (error) {
+        console.error('Could not load selected team Live Game plays:', error);
+      }
+    } else if (teamGame && !isSupabaseConfigured) {
+      live = data.gameData?.[teamGame.id]?.live ?? [];
     }
+    const scouting = await scoutingPromise;
+
+    // A newer selection may have started while Supabase was loading. Only the most recent selection may update the app.
+    if (requestId !== teamSelectionRequest.current) return;
+
+    setData({
+      ...selectionData,
+      scouting,
+      live,
+      gameData: {
+        ...(selectionData.gameData || {}),
+        ...(teamGame ? { [teamGame.id]: { scouting, live } } : {}),
+      },
+    });
   };
 
   const selectGame = async (gameId: string) => {
@@ -284,13 +327,16 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
       [data.activeGameId]: { scouting: data.scouting, live: data.live },
     };
     let targetPlays = gameData[gameId];
-    if (!targetPlays) {
-      let livePlays: Play[] = [];
-      let scoutingPlays: Play[] = [];
-      if (isSupabaseConfigured) {
-        try {
-          const remoteLive = await getLivePlays(gameId);
-          if (remoteLive.length > 0) livePlays = remoteLive.map(livePlayToStandard);
+    if (!targetPlays) targetPlays = { scouting: [], live: [] };
+
+    if (isSupabaseConfigured) {
+      try {
+        // Always refresh Live Game from the selected game's own Supabase rows,
+        // even when this game already has a browser-cached entry.
+        const remoteLive = await getLivePlays(gameId);
+        const livePlays = remoteLive.map(livePlayToStandard);
+        let scoutingPlays = targetPlays.scouting;
+        if (scoutingPlays.length === 0) {
           const gameObj = data.schedule.find(g => g.id === gameId);
           const seasons = await getSeasons();
           const currentSeason = seasons.find(s => s.is_current) ?? seasons[0];
@@ -306,13 +352,14 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
               if (remoteScout.length > 0) scoutingPlays = remoteScout.map(scoutingPlayToStandard);
             }
           }
-        } catch (err) {
-          console.warn('Could not fetch game data from Supabase:', err);
         }
-      } else if (gameId === demoSchedule[0].id) {
-        scoutingPlays = demoScouting;
+        targetPlays = { scouting: scoutingPlays, live: livePlays };
+      } catch (err) {
+        console.warn('Could not refresh selected game data from Supabase:', err);
+        targetPlays = { ...targetPlays, live: [] };
       }
-      targetPlays = { scouting: scoutingPlays, live: livePlays };
+    } else if (!gameData[gameId] && gameId === demoSchedule[0].id) {
+      targetPlays = { scouting: demoScouting, live: [] };
     }
     setData({
       ...data,
@@ -510,22 +557,45 @@ function Kpi({ label, value, note, green = false }: { label: string; value: stri
 
 function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset) => void }) {
   const [phaseFilter, setPhaseFilter] = useState<'all' | 'O' | 'D' | 'K'>('all');
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'scouting' | 'live'>('all');
 
-  const activeGame = data.schedule.find(game => game.id === data.activeGameId) ?? data.schedule[0];
+  const activeGame = data.schedule.find(game => game.id === data.activeGameId);
+  const activeOpponent = data.activeTeam?.trim() || activeGame?.opponent || 'Opponent';
+  // Overview is an opponent scouting report only. Never include Live Game rows here.
   const scoutingPlays = data.scouting;
-  const livePlays = data.live;
-
-  const basePlays = useMemo(() => {
-    if (sourceFilter === 'scouting') return scoutingPlays;
-    if (sourceFilter === 'live') return livePlays;
-    return [...scoutingPlays, ...livePlays];
-  }, [sourceFilter, scoutingPlays, livePlays]);
+  // Team identity and down efficiency always use this opponent's offensive scouting snaps,
+  // independent of the visual phase filter below. Live Game rows are never included.
+  const identityPlays = phaseFilter === 'D'
+    ? scoutingPlays.filter(play => normalizeOdk(play.odk) === 'D')
+    : scoutingPlays.filter(play => normalizeOdk(play.odk) === 'O');
+  const identityDetail = phaseFilter === 'D' ? 'defensive scouting totals only' : 'offensive scouting totals only';
+  const identityResult = (play: Play) => (play.result || '').toLowerCase();
+  const teamIdentity = {
+    runAtt: identityPlays.filter(play => play.type.toLowerCase().includes('run')).length,
+    runYds: identityPlays.filter(play => play.type.toLowerCase().includes('run')).reduce((sum, play) => sum + num(play.gnls), 0),
+    passAtt: identityPlays.filter(play => play.type.toLowerCase().includes('pass')).length,
+    passComp: identityPlays.filter(play => {
+      const result = identityResult(play);
+      return /\bcomplete(?:d)?\b/.test(result) && !/incomplete/.test(result);
+    }).length,
+    passYds: identityPlays.filter(play => play.type.toLowerCase().includes('pass')).reduce((sum, play) => sum + num(play.gnls), 0),
+    sacks: identityPlays.filter(play => /\bsack(?:ed)?\b/.test(identityResult(play))).length,
+    tfl: identityPlays.filter(play => /tackle for loss|\btfl\b/.test(identityResult(play))).length,
+    interceptions: identityPlays.filter(play => /interception|\bint\b/.test(identityResult(play))).length,
+    fumbles: identityPlays.filter(play => /fumble/.test(identityResult(play))).length,
+    touchdowns: identityPlays.filter(play => /touchdown|\btd\b/.test(identityResult(play))).length,
+    rushTd: identityPlays.filter(play => play.type.toLowerCase().includes('run') && /touchdown|\btd\b/.test(identityResult(play))).length,
+    passTd: identityPlays.filter(play => play.type.toLowerCase().includes('pass') && /touchdown|\btd\b/.test(identityResult(play))).length,
+  };
+  const downEfficiency = ['1', '2', '3', '4'].map(down => {
+    const attempts = identityPlays.filter(play => num(play.dn) === Number(down) && num(play.dist) > 0);
+    const conversions = attempts.filter(play => num(play.gnls) >= num(play.dist) || /touchdown|\btd\b/.test(identityResult(play)));
+    return { down, attempts: attempts.length, conversions: conversions.length, rate: attempts.length ? (conversions.length / attempts.length) * 100 : 0 };
+  });
 
   const plays = useMemo(() => {
-    if (phaseFilter === 'all') return basePlays;
-    return basePlays.filter(play => normalizeOdk(play.odk) === phaseFilter);
-  }, [basePlays, phaseFilter]);
+    if (phaseFilter === 'all') return scoutingPlays;
+    return scoutingPlays.filter(play => normalizeOdk(play.odk) === phaseFilter);
+  }, [scoutingPlays, phaseFilter]);
 
   // Core Football Efficiency Calculations
   const runs = plays.filter(play => play.type.toLowerCase().includes('run'));
@@ -676,11 +746,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
     });
   }
 
-  // Live vs Scouting Comparison Shift
-  const hasLive = livePlays.length > 0;
-  const scoutRunPct = scoutingPlays.length ? Math.round((scoutingPlays.filter(p => p.type.toLowerCase().includes('run')).length / scoutingPlays.length) * 100) : 0;
-  const liveRunPct = livePlays.length ? Math.round((livePlays.filter(p => p.type.toLowerCase().includes('run')).length / livePlays.length) * 100) : 0;
-  const runShift = liveRunPct - scoutRunPct;
 
   const loadDemoScout = () => {
     if (setData) {
@@ -691,9 +756,9 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
   return (
     <div className="content">
       <PageHead
-        eyebrow={`Opponent intelligence · ${activeGame ? `${activeGame.season} · ${activeGame.location === 'Home' ? 'vs' : '@'} ${activeGame.opponent}` : 'Active Game'}`}
+        eyebrow={`Opponent intelligence · ${activeGame ? `${activeGame.season} · ${activeGame.location === 'Home' ? 'vs' : '@'} ${activeOpponent}` : activeOpponent}`}
         title="Your film room, sharper."
-        description={`${activeGame ? activeGame.opponent : 'Opponent'} is queued up with ${plays.length} charted snaps in active view (${scoutingPlays.length} scout, ${livePlays.length} live).`}
+        description={`${activeOpponent} scouting report · ${scoutingPlays.length} uploaded scouting snaps. Live Game data is excluded from Overview.`}
         actions={
           <>
             <Link href="/upload" className="btn btn-ghost" data-testid="link-dashboard-upload">
@@ -738,21 +803,45 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
           </button>
         </div>
 
-        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span className="eyebrow" style={{ margin: 0 }}>
-            Source:
-          </span>
-          <select
-            value={sourceFilter}
-            onChange={e => setSourceFilter(e.target.value as 'all' | 'scouting' | 'live')}
-            style={{ padding: '4px 8px', fontSize: 11, borderRadius: 6 }}
-            data-testid="select-source-filter"
-          >
-            <option value="all">Combined ({scoutingPlays.length + livePlays.length})</option>
-            <option value="scouting">Scouting only ({scoutingPlays.length})</option>
-            <option value="live">Live game only ({livePlays.length})</option>
-          </select>
-        </div>
+
+      </div>
+
+      {/* Opponent identity + down efficiency: selected opponent scouting only */}
+      <div className="grid dashboard-grid" style={{ marginBottom: 14 }}>
+        <Panel style={{ gridColumn: '1 / -1' }}>
+          <SectionTitle title="Team identity" detail={`${activeOpponent} · ${identityDetail}`} />
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr>
+                <th>RUN ATT</th><th>RUN YDS</th><th>PASS ATT / COMP</th><th>PASS YDS</th>
+                <th>SACK</th><th>TFL</th><th>INT</th><th>FUMBLES</th><th>TD</th><th>RUSH TD</th><th>PASS TD</th>
+              </tr></thead>
+              <tbody><tr>
+                <td>{teamIdentity.runAtt}</td><td>{teamIdentity.runYds.toFixed(1)}</td>
+                <td>{teamIdentity.passAtt} / {teamIdentity.passComp}</td><td>{teamIdentity.passYds.toFixed(1)}</td>
+                <td>{teamIdentity.sacks}</td><td>{teamIdentity.tfl}</td><td>{teamIdentity.interceptions}</td>
+                <td>{teamIdentity.fumbles}</td><td>{teamIdentity.touchdowns}</td><td>{teamIdentity.rushTd}</td><td>{teamIdentity.passTd}</td>
+              </tr></tbody>
+            </table>
+          </div>
+          <div className="field-hint" style={{ marginTop: 9 }}>
+            Sacks, TFL, interceptions, fumbles, and touchdowns are counted only when the uploaded play result identifies them. Missing result details cannot be inferred.
+          </div>
+        </Panel>
+        <Panel style={{ gridColumn: '1 / -1' }}>
+          <SectionTitle title="Down efficiency" detail={`${phaseFilter === 'D' ? 'Defensive' : 'Offensive'} scouting snaps · conversion = gain reaches the line to gain or a touchdown`} />
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead><tr><th>DOWN</th><th>ATTEMPTS</th><th>CONVERSIONS</th><th>CONVERSION RATE</th></tr></thead>
+              <tbody>
+                {downEfficiency.map(row => <tr key={row.down}>
+                  <td><strong>{row.down}{row.down === '1' ? 'st' : row.down === '2' ? 'nd' : row.down === '3' ? 'rd' : 'th'} Down</strong></td>
+                  <td>{row.attempts}</td><td>{row.conversions}</td><td>{row.rate.toFixed(1)}%</td>
+                </tr>)}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       </div>
 
       {/* KPI Suite */}
@@ -762,28 +851,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         <Kpi label="Success rate" value={`${successRate}%`} note={`${successCount} situational wins`} green={successRate >= 50} />
         <Kpi label="Explosive plays" value={String(explosives.length).padStart(2, '0')} note={`${plays.length ? Math.round((explosives.length / plays.length) * 100) : 0}% of charted snaps`} />
       </div>
-
-      {/* Live Shift Alert Banner */}
-      {hasLive && (
-        <Panel className="fade-in" style={{ marginBottom: 14, background: 'rgba(31, 201, 139, 0.06)', borderColor: 'rgba(31, 201, 139, 0.28)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-              <div style={{ padding: 8, borderRadius: 8, background: 'rgba(31, 201, 139, 0.18)', color: '#62dfae' }}>
-                <Activity size={18} />
-              </div>
-              <div>
-                <strong style={{ fontSize: 14, color: '#fff' }}>Game-Day Shift Detected</strong>
-                <p style={{ margin: '2px 0 0', fontSize: 12, color: 'hsl(var(--muted-foreground))' }}>
-                  Live game is trending {runShift > 5 ? `+${runShift}% more run-heavy` : runShift < -5 ? `+${Math.abs(runShift)}% more pass-heavy` : 'consistent with'} the scouting report ({liveRunPct}% Run live vs {scoutRunPct}% Run scout).
-                </p>
-              </div>
-            </div>
-            <Link href="/live" className="btn btn-green" style={{ padding: '6px 12px', fontSize: 11 }} data-testid="link-banner-live">
-              View live sideline
-            </Link>
-          </div>
-        </Panel>
-      )}
 
       {/* Main Analysis Grid */}
       <div className="grid dashboard-grid">
@@ -907,7 +974,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
           <div style={{ padding: '21px 21px 0' }}>
             <SectionTitle
               title="Recent charted plays"
-              detail={`Latest snaps from ${sourceFilter === 'all' ? 'active board' : sourceFilter}`}
+              detail="Latest uploaded scouting snaps only"
               link={
                 <Link href="/scout" className="tiny-link" data-testid="link-dashboard-recent">
                   Full tape ledger
@@ -965,7 +1032,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
             <div className="empty">
               <Film size={28} />
               <h3>No charted plays for this game</h3>
-              <p>Import a CSV, chart live sideline snaps, or load demo scouting tape.</p>
+              <p>Upload this opponent’s scouting CSV in the Data Room to populate the scouting-only overview.</p>
               <button className="btn btn-primary" onClick={loadDemoScout} data-testid="button-overview-load-demo">
                 <Sparkles /> Load demo scouting data
               </button>
@@ -1093,29 +1160,50 @@ function ScoutPage({ data }: { data: Dataset }) {
   const source = data.scouting;
   const [view, setView] = useState<ScoutView>('dashboard');
   const [search, setSearch] = useState('');
-  const [showPresentationOptions, setShowPresentationOptions] = useState(false);
-  const [presentationBusy, setPresentationBusy] = useState(false);
-  const [presentationError, setPresentationError] = useState('');
-  const [presentationMeta, setPresentationMeta] = useState<PresentationMeta>({
+  const [showReportBuilder, setShowReportBuilder] = useState(false);
+  const [reportType, setReportType] = useState<'offense' | 'defense'>('defense');
+  const [reportStep, setReportStep] = useState(0);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState('');
+  const [reportFields, setReportFields] = useState<Record<string, string>>({
     opponent: data.activeTeam || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '',
-    reportDate: new Date().toISOString().slice(0, 10),
+    reportDate: data.schedule.find(game => game.id === data.activeGameId)?.date || new Date().toISOString().slice(0, 10),
     week: '',
-    gameType: 'Regular season',
-    location: 'Unknown',
+    location: data.schedule.find(game => game.id === data.activeGameId)?.location || 'Unknown',
     preparedBy: '',
-    notes: '',
+    team: data.activeTeam || '',
   });
-  const updatePresentationMeta = (key: keyof PresentationMeta, value: string) => setPresentationMeta(current => ({ ...current, [key]: value }));
-  const generatePresentation = async () => {
-    setPresentationBusy(true);
-    setPresentationError('');
+  const updateReportField = (key: string, value: string) => setReportFields(current => ({ ...current, [key]: value }));
+  const reportPages: Array<{ title: string; fields: Array<[string, string]> }> = reportType === 'defense' ? [
+    { title: 'Opponent Overview', fields: [['Team overview', 'opponentOverview'], ['Coaching staff / scheme notes', 'staffNotes'], ['Key players to watch', 'keyPlayers']] },
+    { title: 'Offensive Identity & Tendencies', fields: [['Offensive scheme and identity', 'scheme'], ['Personnel / formations', 'personnel'], ['Run game / pass game notes', 'runPassNotes'], ['Motion / backfield tells', 'motionNotes']] },
+    { title: 'Formation Breakdown & Adjustments', fields: [['Formation-specific adjustments', 'formationAdjustments'], ['Down and distance plan', 'downDistancePlan'], ['Field position / hash notes', 'fieldPositionNotes']] },
+    { title: 'Defensive Plan', fields: [['Fronts, coverages, and pressures', 'defensivePlan'], ['Key assignments / matchups', 'matchups'], ['Keys to success', 'keysToSuccess'], ['Weekly emphasis / team message', 'weeklyMessage']] },
+  ] : [
+    { title: 'Opponent Overview', fields: [['Team overview', 'opponentOverview'], ['Coaching staff / defensive scheme notes', 'staffNotes'], ['Key players to watch', 'keyPlayers']] },
+    { title: 'Defensive Identity & Tendencies', fields: [['Defensive fronts and structures', 'scheme'], ['Coverage / pressure tendencies', 'coveragePressure'], ['Personnel / formation notes', 'personnel'], ['Down and distance tendencies', 'downDistancePlan']] },
+    { title: 'Offensive Plan & Adjustments', fields: [['Formation-specific offensive answers', 'formationAdjustments'], ['Run / pass plan', 'runPassNotes'], ['Protection / matchup notes', 'matchups']] },
+    { title: 'Weekly Offensive Focus', fields: [['Keys to success', 'keysToSuccess'], ['Situational priorities', 'fieldPositionNotes'], ['Weekly emphasis / team message', 'weeklyMessage']] },
+  ];
+  const reportPageCount = reportPages.length + 2;
+  const createWeeklyReport = async () => {
+    setReportBusy(true);
+    setReportError('');
     try {
-      await downloadScoutingPresentation(source, { ...presentationMeta, opponent: presentationMeta.opponent.trim() || data.activeTeam || 'Opponent' });
-      setShowPresentationOptions(false);
+      await downloadWeeklyScoutingReport(source, reportType, {
+        opponent: reportFields.opponent || data.activeTeam || 'Opponent',
+        reportDate: reportFields.reportDate || '',
+        week: reportFields.week || '',
+        location: reportFields.location || '',
+        preparedBy: reportFields.preparedBy || '',
+        team: reportFields.team || data.activeTeam || '',
+      }, reportFields);
+      setShowReportBuilder(false);
+      setReportStep(0);
     } catch (error) {
-      setPresentationError(error instanceof Error ? error.message : 'Could not generate the scouting presentation.');
+      setReportError(error instanceof Error ? error.message : 'Could not create the weekly scouting document.');
     } finally {
-      setPresentationBusy(false);
+      setReportBusy(false);
     }
   };
 
@@ -1313,26 +1401,57 @@ function ScoutPage({ data }: { data: Dataset }) {
       eyebrow="Scouting · tendency board"
       title="Find the tell."
       description="Every report from the Kangaroos scouting workbook, driven live off the current chart. Success is 4+ yards on 1st, half the sticks on 2nd, and a conversion on 3rd or 4th."
-      actions={<><button className="btn btn-primary" onClick={() => { setPresentationMeta(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '' })); setShowPresentationOptions(true); setPresentationError(''); }} data-testid="button-scout-presentation"><Download /> Generate PDF + PowerPoint</button><Link href="/reports" className="btn btn-ghost" data-testid="link-scout-reports"><ClipboardList /> Build report</Link></>}
+      actions={<button className="btn btn-primary" onClick={() => { setReportFields(current => ({ ...current, opponent: data.activeTeam || current.opponent || data.schedule.find(game => game.id === data.activeGameId)?.opponent || '', team: data.activeTeam || current.team || '' })); setReportType('defense'); setReportStep(0); setReportError(''); setShowReportBuilder(true); }} data-testid="button-scout-build-report"><ClipboardList /> Build Report</button>}
     />
 
-    {showPresentationOptions && <Panel>
-      <SectionTitle title="Generate scouting presentation" detail={`Full scouting chart for ${data.activeTeam || presentationMeta.opponent || 'selected team'} only — no Live Game plays`} link={<button className="btn btn-ghost" onClick={() => setShowPresentationOptions(false)} disabled={presentationBusy}><X size={15} /> Cancel</button>} />
-      <div className="form-grid">
-        <div className="field"><label htmlFor="presentation-opponent">Opponent</label><input id="presentation-opponent" className="input" value={presentationMeta.opponent} onChange={event => updatePresentationMeta('opponent', event.target.value)} /></div>
-        <div className="field"><label htmlFor="presentation-date">Report date</label><input id="presentation-date" type="date" className="input" value={presentationMeta.reportDate} onChange={event => updatePresentationMeta('reportDate', event.target.value)} /></div>
-        <div className="field"><label htmlFor="presentation-week">Week / game number</label><input id="presentation-week" className="input" value={presentationMeta.week} onChange={event => updatePresentationMeta('week', event.target.value)} placeholder="Week 8" /></div>
-        <div className="field"><label htmlFor="presentation-type">Game type</label><select id="presentation-type" className="input" value={presentationMeta.gameType} onChange={event => updatePresentationMeta('gameType', event.target.value)}><option>Regular season</option><option>District</option><option>Playoff</option><option>Scrimmage</option><option>Other</option></select></div>
-        <div className="field"><label htmlFor="presentation-location">Location</label><select id="presentation-location" className="input" value={presentationMeta.location} onChange={event => updatePresentationMeta('location', event.target.value)}><option>Unknown</option><option>Home</option><option>Away</option><option>Neutral</option></select></div>
-        <div className="field"><label htmlFor="presentation-prepared-by">Prepared by</label><input id="presentation-prepared-by" className="input" value={presentationMeta.preparedBy} onChange={event => updatePresentationMeta('preparedBy', event.target.value)} placeholder="Coach name" /></div>
-        <div className="field" style={{ gridColumn: '1 / -1' }}><label htmlFor="presentation-notes">Key defensive notes / staff emphasis</label><textarea id="presentation-notes" className="input" rows={3} value={presentationMeta.notes} onChange={event => updatePresentationMeta('notes', event.target.value)} placeholder="Add notes for the scouting verdict slide..." /></div>
+    {showReportBuilder && <Panel>
+      <SectionTitle
+        title="Build weekly player handout"
+        detail={'Step ' + (reportStep + 1) + ' of ' + reportPageCount + ' · ' + (reportFields.opponent || data.activeTeam || 'Selected opponent') + ' · scouting upload only'}
+        link={<button className="btn btn-ghost" onClick={() => setShowReportBuilder(false)} disabled={reportBusy}><X size={15} /> Close</button>}
+      />
+      <div className="form-grid" style={{ marginBottom: 16 }}>
+        <div className="field" style={{ gridColumn: '1 / -1' }}>
+          <label>Report type</label>
+          <div className="actions">
+            <button className={'btn ' + (reportType === 'offense' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setReportType('offense'); setReportStep(0); }} disabled={reportBusy} data-testid="button-report-for-offense">For Offense</button>
+            <button className={'btn ' + (reportType === 'defense' ? 'btn-primary' : 'btn-ghost')} onClick={() => { setReportType('defense'); setReportStep(0); }} disabled={reportBusy} data-testid="button-report-for-defense">For Defense</button>
+          </div>
+          <p className="field-hint">The report uses available scouting uploads and site information. Fill in coaching details that are not in the chart.</p>
+        </div>
       </div>
-      <div className="actions" style={{ marginTop: 14, alignItems: 'center' }}>
-        <button className="btn btn-primary" onClick={generatePresentation} disabled={presentationBusy || !source.length} data-testid="button-generate-scout-presentation"><Download /> {presentationBusy ? 'Building files…' : 'Download PDF + editable PowerPoint'}</button>
-        <span className="eyebrow">{source.length} scouting plays · 15+ run / 20+ pass explosive thresholds</span>
+      {reportStep === 0 && <div className="form-grid">
+        <div className="field"><label htmlFor="weekly-report-opponent">Opponent</label><input id="weekly-report-opponent" className="input" value={reportFields.opponent || ''} onChange={event => updateReportField('opponent', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-team">Our team</label><input id="weekly-report-team" className="input" value={reportFields.team || ''} onChange={event => updateReportField('team', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-date">Game / report date</label><input id="weekly-report-date" type="date" className="input" value={reportFields.reportDate || ''} onChange={event => updateReportField('reportDate', event.target.value)} /></div>
+        <div className="field"><label htmlFor="weekly-report-week">Week / game number</label><input id="weekly-report-week" className="input" value={reportFields.week || ''} onChange={event => updateReportField('week', event.target.value)} placeholder="Week 8" /></div>
+        <div className="field"><label htmlFor="weekly-report-location">Location</label><select id="weekly-report-location" className="input" value={reportFields.location || 'Unknown'} onChange={event => updateReportField('location', event.target.value)}><option>Unknown</option><option>Home</option><option>Away</option><option>Neutral</option></select></div>
+        <div className="field"><label htmlFor="weekly-report-prepared-by">Prepared by</label><input id="weekly-report-prepared-by" className="input" value={reportFields.preparedBy || ''} onChange={event => updateReportField('preparedBy', event.target.value)} placeholder="Coach name" /></div>
+      </div>}
+      {reportStep > 0 && reportStep <= reportPages.length && <div>
+        <div className="callout" style={{ marginBottom: 14 }}><ClipboardList size={16} /><span><strong>{reportPages[reportStep - 1].title}</strong> — enter coaching notes intended for the player handout. Tendencies from the scouting file are added automatically at the end.</span></div>
+        <div className="form-grid">
+          {reportPages[reportStep - 1].fields.map(([label, key]) => <div className="field" key={key} style={{ gridColumn: '1 / -1' }}>
+            <label htmlFor={'weekly-report-' + key}>{label}</label>
+            <textarea id={'weekly-report-' + key} className="input" rows={3} value={reportFields[key] || ''} onChange={event => updateReportField(key, event.target.value)} placeholder="Add verified information and coaching instructions…" />
+          </div>)}
+        </div>
+      </div>}
+      {reportStep === reportPages.length + 1 && <div>
+        <div className="callout"><Check size={16} /><span><strong>Ready to create the handout.</strong> The PDF will include your completed sections plus a scouting-data snapshot calculated from {source.length} plays for the selected scouting team. Blank coach-entered sections will be omitted.</span></div>
+        <div className="feed" style={{ marginTop: 14 }}>
+          <div className="feed-row"><span className="feed-num"><ClipboardList size={15} /></span><div className="feed-main"><strong>{reportType === 'defense' ? 'For Defense' : 'For Offense'}</strong><span>{reportPages.map(page => page.title).join(' · ')}</span></div></div>
+          <div className="feed-row"><span className="feed-num"><FileSpreadsheet size={15} /></span><div className="feed-main"><strong>Automatic scouting snapshot</strong><span>Formation, play-call, personnel, motion, down tendencies, run/pass rates, and explosive plays.</span></div></div>
+        </div>
+      </div>}
+      {reportError && <div className="callout" role="alert" style={{ marginTop: 12, color: '#b42318' }}><CircleAlert size={16} /><span>{reportError}</span></div>}
+      <div className="actions" style={{ marginTop: 18, alignItems: 'center', justifyContent: 'space-between' }}>
+        <button className="btn btn-ghost" onClick={() => setReportStep(step => Math.max(0, step - 1))} disabled={reportStep === 0 || reportBusy}><ChevronRight style={{ transform: 'rotate(180deg)' }} size={15} /> Back</button>
+        <span className="eyebrow">Page {reportStep + 1} / {reportPageCount}</span>
+        {reportStep < reportPages.length + 1
+          ? <button className="btn btn-primary" onClick={() => setReportStep(step => Math.min(reportPages.length + 1, step + 1))} disabled={reportBusy}><ChevronRight size={15} /> Next page</button>
+          : <button className="btn btn-primary" onClick={createWeeklyReport} disabled={reportBusy || !source.length} data-testid="button-create-weekly-report"><Download size={15} /> {reportBusy ? 'Creating document…' : 'Create Document (PDF)'}</button>}
       </div>
-      {presentationError && <div className="callout" role="alert" style={{ marginTop: 12, color: '#b42318' }}><CircleAlert size={16} /><span>{presentationError}</span></div>}
-      <p className="field-hint" style={{ marginTop: 10 }}>The report is built from this selected team’s scouting chart only. Tables split across pages/slides, long cells shrink to fit, and layout checks stop content from crossing slide or footer boundaries.</p>
     </Panel>}
 
     <div className="filters report-tabs">
@@ -1575,26 +1694,74 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
 
   const resultOptions = ['Complete', 'Complete TD', 'Fumble', 'Good', 'Incomplete', 'Interception', 'No Good', 'Penalty', 'Return', 'Rush', 'Rush TD', 'Sack', 'Scramble', '2 Pt', 'Extra Pt', 'Punt', 'FG', 'Onside Kick', 'Pass'];
 
-  const addPlay = () => {
+  const addPlay = async () => {
     if (!form.yardLn.trim()) { toast.notify('Enter the end yard line after the snap'); return; }
     if (calculatedGnls === null) { toast.notify('Use a signed yard line like -22 or 22'); return; }
     if (!form.result.trim()) { toast.notify('Add a result before saving the snap'); return; }
-    
-    const next = { ...data, live: [...live, { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(live.length + 1).padStart(2, '0') }] };
-    setData(next);
-    
-    // reset form for next play
-    setForm(current => ({ ...current, playNo: String(next.live.length + 1).padStart(2, '0'), startYardLn: normalizedFormYardLine, yardLn: '', gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
-    toast.notify(`Live snap added · GN/LS ${formatGnls(calculatedGnls)}`);
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before saving Live Game snaps.');
+      return;
+    }
+
+    const nextPlay = { ...form, startYardLn: actualStart, yardLn: normalizedFormYardLine, gnls: String(calculatedGnls), playNo: String(Math.max(0, ...live.map(play => Number(play.playNo) || 0)) + 1).padStart(2, '0') };
+    try {
+      const saved = await createLivePlay(data.activeGameId, nextPlay);
+      if (!saved) throw new Error('Supabase did not confirm that the snap was saved.');
+      const next = { ...data, live: [...live, nextPlay] };
+      setData(next);
+      setForm(current => ({ ...current, playNo: String(Number(nextPlay.playNo) + 1).padStart(2, '0'), startYardLn: normalizedFormYardLine, yardLn: '', gnls: '0', form: '', offPlay: '', carrier: '', defense: '', result: '' }));
+      toast.notify(`Saved to Supabase · live snap #${nextPlay.playNo}`);
+    } catch (error) {
+      console.error('Could not save Live Game snap to Supabase:', error);
+      toast.notify(`Live snap was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  };
+
+  const exportLiveHudlCsv = () => {
+    if (!live.length) {
+      window.alert('There are no live plays to export yet.');
+      return;
+    }
+    const game = data.schedule?.find(item => item.id === data.activeGameId);
+    const prefix = game
+      ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
+      : new Date().toISOString().slice(0, 10);
+    download(hudlCsvFilename(prefix, 'LiveGame'), standardPlaysToHudlCsv(live));
   };
 
   const importLive = (file?: File) => {
     if (!file) return;
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before importing Live Game CSV.');
+      fileRef.current && (fileRef.current.value = '');
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const parsed = deriveLiveGains(parseCsv(String(reader.result ?? '')), previousYardLine);
-      setData({ ...data, live: [...live, ...parsed] });
-      toast.notify(`${parsed.length} live snaps imported with yard-line gains`);
+      const firstNumber = Math.max(0, ...live.map(play => Number(play.playNo) || 0));
+      const numbered = parsed.map((play, index) => ({ ...play, playNo: String(firstNumber + index + 1).padStart(2, '0') }));
+      try {
+        for (const play of numbered) {
+          const saved = await createLivePlay(data.activeGameId, play);
+          if (!saved) throw new Error(`Supabase did not confirm snap #${play.playNo}.`);
+        }
+        const remote = await getLivePlays(data.activeGameId);
+        const savedPlays = remote.map(livePlayToStandard);
+        setData({ ...data, live: savedPlays });
+        toast.notify(`Saved ${savedPlays.length - live.length} imported snaps to Supabase.`);
+      } catch (error) {
+        console.error('Live Game CSV import failed to save to Supabase:', error);
+        try {
+          const remote = await getLivePlays(data.activeGameId);
+          setData({ ...data, live: remote.map(livePlayToStandard) });
+        } catch (reloadError) {
+          console.error('Could not reload Live Game after import failure:', reloadError);
+        }
+        toast.notify(`Live CSV import stopped: ${error instanceof Error ? error.message : 'unknown error'}. Saved rows were reloaded from Supabase.`);
+      } finally {
+        if (fileRef.current) fileRef.current.value = '';
+      }
     };
     reader.readAsText(file);
   };
@@ -1602,13 +1769,38 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   const updateLiveRow = (displayIndex: number, key: keyof Play, value: string) => {
     const actualIndex = live.length - 1 - displayIndex;
     const nextLive = live.map((play, index) => index === actualIndex ? { ...play, [key]: key === 'odk' ? normalizeOdk(value) : value } : play);
-    setData({ ...data, live: recalculateLiveGains(nextLive, '-20') }); // recalculated from start
+    setData({ ...data, live: recalculateLiveGains(nextLive, '-20') });
   };
 
-  const removeLiveRow = (displayIndex: number) => {
+  const saveLiveRow = async (displayIndex: number, updatedPlay?: Play) => {
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) return;
     const actualIndex = live.length - 1 - displayIndex;
-    setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
-    toast.notify('Live snap removed');
+    const play = updatedPlay ?? live[actualIndex];
+    if (!play) return;
+    try {
+      await updateLivePlayByNumber(data.activeGameId, Number(play.playNo), play);
+    } catch (error) {
+      console.error('Could not save edited Live Game snap to Supabase:', error);
+      toast.notify(`Edit was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  };
+
+  const removeLiveRow = async (displayIndex: number) => {
+    const actualIndex = live.length - 1 - displayIndex;
+    const play = live[actualIndex];
+    if (!play) return;
+    if (!isSupabaseConfigured || !data.activeGameId || data.activeGameId.startsWith('game-')) {
+      toast.notify('Select a scheduled game connected to Supabase before deleting Live Game snaps.');
+      return;
+    }
+    try {
+      await deleteLivePlayByNumber(data.activeGameId, Number(play.playNo));
+      setData({ ...data, live: live.filter((_, index) => index !== actualIndex) });
+      toast.notify('Live snap deleted from Supabase');
+    } catch (error) {
+      console.error('Could not delete Live Game snap from Supabase:', error);
+      toast.notify(`Live snap was not deleted: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
   };
 
   const field = (key: keyof Play, label: string, options?: string[]) => <div className="field"><label htmlFor={`live-${key}`}>{label}</label>{options ? <select id={`live-${key}`} value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`select-live-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input id={`live-${key}`} className="input" value={form[key]} onChange={event => update(key, event.target.value)} data-testid={`input-live-${key}`} />}</div>;
@@ -1623,9 +1815,9 @@ function LiveSpreadsheetPage({ data, setData }: { data: Dataset; setData: (data:
   
   const endYardLineField = <div className="field"><label htmlFor="live-yardLn">End yard line</label><input id="live-yardLn" className="input" value={form.yardLn} onChange={event => update('yardLn', event.target.value)} onBlur={() => update('yardLn', normalizeYardLine(form.yardLn))} placeholder="-22 or 22" inputMode="numeric" data-testid="input-live-yardLn" /><span className="field-hint">Negative = own · positive = opponent</span></div>;
 
-  const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => (key === 'yardLn' || key === 'startYardLn') && updateLiveRow(displayIndex, key, normalizeYardLine(event.currentTarget.value))} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
+  const editCell = (displayIndex: number, key: keyof Play, value: string, options?: string[]) => options ? <select className="table-input" value={value} onChange={event => { const nextValue = event.target.value; updateLiveRow(displayIndex, key, nextValue); const actualIndex = live.length - 1 - displayIndex; const currentPlay = live[actualIndex]; if (currentPlay) void saveLiveRow(displayIndex, { ...currentPlay, [key]: key === 'odk' ? normalizeOdk(nextValue) : nextValue }); }} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`select-edit-live-${displayIndex}-${key}`}>{options.map(option => <option key={option}>{option}</option>)}</select> : <input className="table-input" value={value} onChange={event => updateLiveRow(displayIndex, key, event.target.value)} onBlur={event => { const rawValue = event.currentTarget.value; const nextValue = key === 'yardLn' || key === 'startYardLn' ? normalizeYardLine(rawValue) : rawValue; if (key === 'yardLn' || key === 'startYardLn') updateLiveRow(displayIndex, key, nextValue); const actualIndex = live.length - 1 - displayIndex; const currentPlay = live[actualIndex]; if (currentPlay) void saveLiveRow(displayIndex, { ...currentPlay, [key]: key === 'odk' ? normalizeOdk(nextValue) : nextValue }); }} aria-label={`Edit ${key} for snap ${displayIndex + 1}`} data-testid={`input-edit-live-${displayIndex}-${key}`} />;
 
-  return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button></>} />
+  return <div className="content"><PageHead eyebrow="Live game · editable chart" title="Keep every snap in reach." description="Chart the game as it happens, then edit any prior snap directly in the spreadsheet below." actions={<><input ref={fileRef} className="drop-input" type="file" accept=".csv,text/csv" onChange={event => importLive(event.target.files?.[0])} data-testid="input-live-csv" /><button className="btn btn-ghost" onClick={() => fileRef.current?.click()} data-testid="button-import-live"><UploadCloud /> Import live CSV</button><button className="btn btn-primary" onClick={exportLiveHudlCsv} data-testid="button-export-live-hudl"><Download /> Hudl CSV — Live Game</button></>} />
     <Panel><SectionTitle title="Add a live snap" detail="Choose O, D, or K. GN/LS calculates from start to end yard line." /><div className="form-grid">{field('odk', 'ODK', ['O', 'D', 'K'])}{field('dn', 'Down', ['1', '2', '3', '4'])}{field('dist', 'Distance')}{field('hash', 'Hash', ['L', 'M', 'R'])}{startYardLineField}{endYardLineField}{editableField('form', 'Formation')}{editableField('offPlay', 'Play call')}{field('type', 'Play type', ['Run', 'Pass'])}{editableField('carrier', 'Ball carrier')}{field('result', 'Result', resultOptions)}{editableField('defense', 'Defense')}<div className="field"><label htmlFor="live-gnls">GN/LS · calculated</label><output id="live-gnls" className={`computed-value ${calculatedGnls !== null && calculatedGnls >= 0 ? 'positive' : calculatedGnls !== null ? 'negative' : ''}`} data-testid="output-live-gnls">{formatGnls(calculatedGnls)}</output><span className="field-hint">From {actualStart}</span></div></div><div className="actions" style={{ marginTop: 17 }}><button className="btn btn-green" onClick={addPlay} data-testid="button-add-live-play"><Plus /> Add snap <span style={{ opacity: .7 }}>↵</span></button><span className="eyebrow" style={{ alignSelf: 'center' }}>{live.length} live snaps tracked</span></div></Panel>
     <Panel style={{ marginTop: 14 }} pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title="Live game spreadsheet" detail={live.length ? `${live.length} snaps · click any cell to edit` : 'Your saved snaps will appear here'} /></div>{live.length ? <div className="table-wrap"><table className="data-table live-sheet"><thead><tr><th>Play</th><th>ODK</th><th>Down</th><th>Dist</th><th>Start</th><th>End</th><th>Formation</th><th>Play call</th><th>Play type</th><th>Ball carrier</th><th>Result</th><th>Defense</th><th>GN/LS</th><th /></tr></thead><tbody>{live.slice().reverse().map((play, i) => <tr key={`${play.playNo}-${i}`} data-testid={`row-live-${i}`}><td><strong>#{play.playNo}</strong></td><td>{editCell(i, 'odk', play.odk, ['O', 'D', 'K'])}</td><td>{editCell(i, 'dn', play.dn, ['1', '2', '3', '4'])}</td><td>{editCell(i, 'dist', play.dist)}</td><td>{editCell(i, 'startYardLn', play.startYardLn ?? '')}</td><td>{editCell(i, 'yardLn', play.yardLn)}</td><td>{editCell(i, 'form', play.form)}</td><td>{editCell(i, 'offPlay', play.offPlay)}</td><td>{editCell(i, 'type', play.type, ['Run', 'Pass'])}</td><td>{editCell(i, 'carrier', play.carrier)}</td><td>{editCell(i, 'result', play.result, resultOptions)}</td><td>{editCell(i, 'defense', play.defense)}</td><td className={num(play.gnls) >= 0 ? 'gain-positive' : 'gain-negative'}>{formatGnls(num(play.gnls))}</td><td><button className="btn btn-danger" style={{ padding: 6 }} onClick={() => removeLiveRow(i)} aria-label={`Remove play ${play.playNo}`} data-testid={`button-remove-live-${i}`}><Trash2 size={13} /></button></td></tr>)}</tbody></table></div> : <div className="empty"><FileSpreadsheet size={30} /><h3>No live snaps yet</h3><p>Add a snap above or import a live CSV. Saved snaps stay editable here.</p></div>}</Panel>{toast.message && <Toast message={toast.message} onClose={toast.clear} />}
   </div>;
@@ -1722,6 +1914,16 @@ function ReportsHubPage({ data }: { data: Dataset }) {
   const dLivePctRun = defenseLive.length ? (dLiveRuns / defenseLive.length) * 100 : 0;
   const dLivePctPass = defenseLive.length ? (dLivePasses / defenseLive.length) * 100 : 0;
 
+  const yardageSummary = (plays: Play[], predicate: (play: Play) => boolean) => {
+    const relevantPlays = plays.filter(predicate);
+    const total = relevantPlays.reduce((sum, play) => sum + num(play.gnls), 0);
+    return { total, average: relevantPlays.length ? total / relevantPlays.length : 0 };
+  };
+  const dScoutRushYards = yardageSummary(defenseScout, isRun);
+  const dLiveRushYards = yardageSummary(defenseLive, isRun);
+  const dScoutPassYards = yardageSummary(defenseScout, isPass);
+  const dLivePassYards = yardageSummary(defenseLive, isPass);
+
   const dFormations = Array.from(new Set([...defenseScout.map(p => p.form), ...defenseLive.map(p => p.form)])).filter(Boolean).map(form => {
     const scoutF = defenseScout.filter(p => p.form === form);
     const liveF = defenseLive.filter(p => p.form === form);
@@ -1805,6 +2007,15 @@ function ReportsHubPage({ data }: { data: Dataset }) {
         </Panel>
       </div>
 
+      <Panel><SectionTitle title="YARDAGE ALLOWED" detail="Scout baseline vs live game · average per run/pass play" />
+        <div className="table-wrap"><table className="data-table"><thead><tr><th>Category</th><th>Scout Total</th><th>Scout Avg</th><th>Live Total</th><th>Live Avg</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Rushing yards</strong></td><td>{dScoutRushYards.total.toFixed(1)}</td><td>{dScoutRushYards.average.toFixed(1)}</td><td>{dLiveRushYards.total.toFixed(1)}</td><td>{dLiveRushYards.average.toFixed(1)}</td></tr>
+            <tr><td><strong>Passing yards</strong></td><td>{dScoutPassYards.total.toFixed(1)}</td><td>{dScoutPassYards.average.toFixed(1)}</td><td>{dLivePassYards.total.toFixed(1)}</td><td>{dLivePassYards.average.toFixed(1)}</td></tr>
+          </tbody>
+        </table></div>
+      </Panel>
+
       <Panel><SectionTitle title="DOWN/DISTANCE" detail="Situational shifts" />
         <div className="table-wrap"><table className="data-table"><thead><tr><th>Situation</th><th>Live R/P</th><th>Scout R/P</th><th>Expected (Scout)</th></tr></thead>
         <tbody>{dSituations.map(s => {
@@ -1821,76 +2032,77 @@ function ReportsHubPage({ data }: { data: Dataset }) {
 }
 
 function SchedulePage({ data, setData }: { data: Dataset; setData: (data: Dataset) => void }) {
-  const [draft, setDraft] = useState({ season: '2025', opponent: '', date: '', location: 'Home', result: '—' });
+  const [draft, setDraft] = useState({ season: String(new Date().getFullYear()), opponent: '', date: '', location: 'Home', result: '—' });
   const [showArchived, setShowArchived] = useState(false);
+  const [savingGame, setSavingGame] = useState(false);
   const schedule = data.schedule;
   const activeGame = schedule.find(game => game.id === data.activeGameId) ?? schedule[0];
   const seasons = Array.from(new Set(schedule.map(game => game.season))).sort((a, b) => Number(b) - Number(a));
   const lastSeason = activeGame ? String(Number(activeGame.season) - 1) : seasons[1];
-  const addGame = () => {
-    if (!draft.season.trim() || !draft.opponent.trim()) return;
-    const id = `game-${Date.now()}-${draft.opponent.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`;
-    const game: ScheduleGame = { ...draft, id, archived: false };
-    setData({ ...data, schedule: [game, ...schedule], activeGameId: id });
-    setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));
+  const addGame = async () => {
+    const seasonYear = draft.season.trim();
+    const opponent = draft.opponent.trim();
+    if (!seasonYear || !opponent || savingGame) return;
+    if (!isSupabaseConfigured) {
+      window.alert('Cannot save this game because Supabase is not configured in this deployment. No local-only game was created.');
+      return;
+    }
+
+    setSavingGame(true);
+    try {
+      const remoteSeasons = await getSeasons();
+      const remoteSeason = remoteSeasons.find(season => String(season.season_year) === seasonYear);
+      if (!remoteSeason) {
+        throw new Error(`Season ${seasonYear} does not exist in Supabase. Create/select a season in the database before adding games to it.`);
+      }
+
+      const created = await createGame({
+        seasonId: remoteSeason.id,
+        opponent,
+        gameDate: draft.date,
+        location: draft.location,
+        result: draft.result,
+      });
+      if (!created?.id || created.id.startsWith('game-')) {
+        throw new Error('Supabase did not return a valid saved game ID.');
+      }
+
+      const game: ScheduleGame = {
+        id: created.id,
+        season: String(remoteSeason.season_year),
+        opponent: created.opponent,
+        date: created.game_date ?? '',
+        location: created.location ?? '—',
+        result: created.game_result ?? '—',
+        archived: created.archived,
+      };
+      setData({
+        ...data,
+        schedule: [game, ...schedule.filter(item => item.id !== game.id)],
+        activeGameId: game.id,
+        activeTeam: game.opponent,
+        scouting: [],
+        live: [],
+        gameData: { ...(data.gameData || {}), [game.id]: { scouting: [], live: [] } },
+      });
+      setDraft(current => ({ ...current, opponent: '', date: '', result: '—' }));
+    } catch (error) {
+      console.error('Could not save scheduled game to Supabase:', error);
+      window.alert(`Game was not saved to Supabase: ${error instanceof Error ? error.message : 'unknown error'}. It was not added locally.`);
+    } finally {
+      setSavingGame(false);
+    }
   };
   const toggleArchive = (id: string) => setData({ ...data, schedule: schedule.map(game => game.id === id ? { ...game, archived: !game.archived } : game) });
   const chooseGame = (id: string) => setData({ ...data, activeGameId: id });
   const visibleGames = schedule.filter(game => showArchived || !game.archived);
   const currentSeasonGames = schedule.filter(game => game.season === activeGame?.season);
   const lastSeasonGames = schedule.filter(game => game.season === lastSeason);
-  return <div className="content"><PageHead eyebrow="Schedule · seasons & opponents" title="Know who is next." description="Enter your schedule, choose the active game, archive old opponents, and keep last season available for comparison." /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .45fr)' }}><div className="grid"><Panel><SectionTitle title="Add to schedule" detail="Build the board you want to chart" /><div className="form-grid schedule-form"><div className="field"><label htmlFor="schedule-season">Season</label><input id="schedule-season" className="input" value={draft.season} onChange={event => setDraft({ ...draft, season: event.target.value })} placeholder="2025" data-testid="input-schedule-season" /></div><div className="field"><label htmlFor="schedule-opponent">Opponent</label><input id="schedule-opponent" className="input" value={draft.opponent} onChange={event => setDraft({ ...draft, opponent: event.target.value })} placeholder="Opponent name" data-testid="input-schedule-opponent" /></div><div className="field"><label htmlFor="schedule-date">Date</label><input id="schedule-date" className="input" type="date" value={draft.date} onChange={event => setDraft({ ...draft, date: event.target.value })} data-testid="input-schedule-date" /></div><div className="field"><label htmlFor="schedule-location">Location</label><select id="schedule-location" value={draft.location} onChange={event => setDraft({ ...draft, location: event.target.value })} data-testid="select-schedule-location"><option>Home</option><option>Away</option><option>Neutral</option></select></div></div><button className="btn btn-primary" onClick={addGame} disabled={!draft.season.trim() || !draft.opponent.trim()} data-testid="button-add-schedule-game"><Plus /> Add game</button></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={`${activeGame?.season ?? 'Season'} schedule`} detail="Choose a game to make it active" link={<button className="btn btn-ghost" onClick={() => setShowArchived(value => !value)} data-testid="button-toggle-archived">{showArchived ? 'Hide archived' : 'Show archived'}</button>} /></div><div className="schedule-list">{visibleGames.map(game => <div className={`schedule-row ${game.id === data.activeGameId ? 'selected-schedule' : ''}`} key={game.id}><button className="schedule-select" onClick={() => chooseGame(game.id)} data-testid={`button-choose-game-${game.id}`}><span className="schedule-date">{game.date || 'Date TBD'}</span><strong>{game.opponent}</strong><span>{game.season} · {game.location} · {game.result}</span></button><button className={`btn ${game.archived ? 'btn-ghost' : 'btn-danger'}`} onClick={() => toggleArchive(game.id)} data-testid={`button-archive-game-${game.id}`}>{game.archived ? 'Restore' : 'Archive'}</button></div>)}</div></Panel></div><div className="grid"><Panel><SectionTitle title="Active game" detail="Current charting context" />{activeGame ? <><div className="kpi-value" style={{ fontSize: 27 }}>{activeGame.opponent}</div><p className="kpi-note">{activeGame.season} · {activeGame.date || 'Date TBD'} · {activeGame.location}</p><div className="callout" style={{ marginTop: 16 }}><Target />Live and scouting boards are ready for the selected game.</div></> : <div className="empty"><FileSpreadsheet size={28} /><h3>No active game</h3><p>Add a schedule entry to begin.</p></div>}</Panel><Panel><SectionTitle title="Last season comparison" detail={`${lastSeason} schedule`} /><div className="compare-stat"><span>{activeGame?.season ?? 'Current'} games</span><b>{currentSeasonGames.length}</b></div><div className="compare-stat"><span>{lastSeason} games</span><b>{lastSeasonGames.length}</b></div><div className="feed" style={{ marginTop: 12 }}>{lastSeasonGames.length ? lastSeasonGames.slice(0, 4).map(game => <div className="feed-row" key={game.id}><span className="feed-num">{game.season}</span><div className="feed-main"><strong>{game.opponent}</strong><span>{game.date || 'Date TBD'} · {game.result}</span></div></div>) : <div className="eyebrow">Add last season opponents to compare them here.</div>}</div></Panel></div></div></div>;
+  return <div className="content"><PageHead eyebrow="Schedule · seasons & opponents" title="Know who is next." description="Enter your schedule, choose the active game, archive old opponents, and keep last season available for comparison." /><div className="grid" style={{ gridTemplateColumns: 'minmax(0, 1fr) minmax(280px, .45fr)' }}><div className="grid"><Panel><SectionTitle title="Add to schedule" detail="Build the board you want to chart" /><div className="form-grid schedule-form"><div className="field"><label htmlFor="schedule-season">Season</label><input id="schedule-season" className="input" value={draft.season} onChange={event => setDraft({ ...draft, season: event.target.value })} placeholder="2025" data-testid="input-schedule-season" /></div><div className="field"><label htmlFor="schedule-opponent">Opponent</label><input id="schedule-opponent" className="input" value={draft.opponent} onChange={event => setDraft({ ...draft, opponent: event.target.value })} placeholder="Opponent name" data-testid="input-schedule-opponent" /></div><div className="field"><label htmlFor="schedule-date">Date</label><input id="schedule-date" className="input" type="date" value={draft.date} onChange={event => setDraft({ ...draft, date: event.target.value })} data-testid="input-schedule-date" /></div><div className="field"><label htmlFor="schedule-location">Location</label><select id="schedule-location" value={draft.location} onChange={event => setDraft({ ...draft, location: event.target.value })} data-testid="select-schedule-location"><option>Home</option><option>Away</option><option>Neutral</option></select></div></div><button className="btn btn-primary" onClick={addGame} disabled={!draft.season.trim() || !draft.opponent.trim() || savingGame} data-testid="button-add-schedule-game"><Plus /> {savingGame ? "Saving…" : "Add game"}</button></Panel><Panel pad={false}><div style={{ padding: '21px 21px 0' }}><SectionTitle title={`${activeGame?.season ?? 'Season'} schedule`} detail="Choose a game to make it active" link={<button className="btn btn-ghost" onClick={() => setShowArchived(value => !value)} data-testid="button-toggle-archived">{showArchived ? 'Hide archived' : 'Show archived'}</button>} /></div><div className="schedule-list">{visibleGames.map(game => <div className={`schedule-row ${game.id === data.activeGameId ? 'selected-schedule' : ''}`} key={game.id}><button className="schedule-select" onClick={() => chooseGame(game.id)} data-testid={`button-choose-game-${game.id}`}><span className="schedule-date">{game.date || 'Date TBD'}</span><strong>{game.opponent}</strong><span>{game.season} · {game.location} · {game.result}</span></button><button className={`btn ${game.archived ? 'btn-ghost' : 'btn-danger'}`} onClick={() => toggleArchive(game.id)} data-testid={`button-archive-game-${game.id}`}>{game.archived ? 'Restore' : 'Archive'}</button></div>)}</div></Panel></div><div className="grid"><Panel><SectionTitle title="Active game" detail="Current charting context" />{activeGame ? <><div className="kpi-value" style={{ fontSize: 27 }}>{activeGame.opponent}</div><p className="kpi-note">{activeGame.season} · {activeGame.date || 'Date TBD'} · {activeGame.location}</p><div className="callout" style={{ marginTop: 16 }}><Target />Live and scouting boards are ready for the selected game.</div></> : <div className="empty"><FileSpreadsheet size={28} /><h3>No active game</h3><p>Add a schedule entry to begin.</p></div>}</Panel><Panel><SectionTitle title="Last season comparison" detail={`${lastSeason} schedule`} /><div className="compare-stat"><span>{activeGame?.season ?? 'Current'} games</span><b>{currentSeasonGames.length}</b></div><div className="compare-stat"><span>{lastSeason} games</span><b>{lastSeasonGames.length}</b></div><div className="feed" style={{ marginTop: 12 }}>{lastSeasonGames.length ? lastSeasonGames.slice(0, 4).map(game => <div className="feed-row" key={game.id}><span className="feed-num">{game.season}</span><div className="feed-main"><strong>{game.opponent}</strong><span>{game.date || 'Date TBD'} · {game.result}</span></div></div>) : <div className="eyebrow">Add last season opponents to compare them here.</div>}</div></Panel></div></div></div>;
 }
 
 function NotFoundPage() { return <div className="content"><PageHead eyebrow="404 · off the board" title="That page isn't charted." description="Use the workspace navigation to get back into the film room." actions={<Link href="/" className="btn btn-primary" data-testid="link-not-found-home"><LayoutDashboard /> Back to overview</Link>} /></div>; }
 
-
-function HudlCsvExportBar() {
-  const [location] = useLocation();
-  const [busy, setBusy] = useState(false);
-
-  const route = location.split('?')[0];
-  const isLive = route === '/live';
-  const isDataRoom = route === '/scout' || route === '/reports';
-  if (!isLive && !isDataRoom) return null;
-
-  function exportHudlCsv(kind: 'live' | 'scouting') {
-    setBusy(true);
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem('coach-hudl-datasets-v1');
-      if (!raw) return;
-      const data = JSON.parse(raw) as Dataset;
-      const game = data.schedule?.find(item => item.id === data.activeGameId);
-      const gameData = data.gameData?.[data.activeGameId];
-      const plays = kind === 'live' ? (gameData?.live ?? data.live ?? []) : (gameData?.scouting ?? data.scouting ?? []);
-      if (!plays.length) {
-        window.alert(kind === 'live' ? 'There are no live plays to export yet.' : 'There are no Data Room plays to export yet.');
-        return;
-      }
-      const prefix = game
-        ? (game.date || new Date().toISOString().slice(0, 10)) + '_' + (game.opponent || 'Game')
-        : new Date().toISOString().slice(0, 10);
-      download(hudlCsvFilename(prefix, kind === 'live' ? 'LiveGame' : 'DataRoom'), standardPlaysToHudlCsv(plays));
-    } finally {
-      window.setTimeout(() => setBusy(false), 250);
-    }
-  }
-
-  return (
-    <div className="fixed bottom-5 right-5 z-50 flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow-xl backdrop-blur dark:border-slate-700 dark:bg-slate-900/95">
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() => exportHudlCsv(isLive ? 'live' : 'scouting')}
-        className="inline-flex items-center gap-2 rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-wait disabled:opacity-60 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200"
-        title={isLive ? 'Export the current Live Game as Connect CSV' : 'Export the current Data Room plays as Connect CSV'}
-      >
-        <Download size={16} />
-        {isLive ? 'Hudl CSV — Live Game' : 'Hudl CSV — Data Room'}
-      </button>
-    </div>
-  );
-}
 
 function Router() {
   const [data, setDataState] = useState<Dataset>(safeLoad);
@@ -1944,10 +2156,15 @@ function Router() {
           archived: game.archived,
         }));
 
+        // Keep the game already selected in this browser when it still exists in
+        // Supabase. Resetting to the first non-archived game on every load can
+        // make Live Game appear to lose plays or switch to another opponent.
         const activeGameId =
-          schedule.find(game => !game.archived)?.id ??
-          schedule[0]?.id ??
-          '';
+          schedule.some(game => game.id === data.activeGameId)
+            ? data.activeGameId
+            : schedule.find(game => !game.archived)?.id ??
+              schedule[0]?.id ??
+              '';
 
         let livePlays: Play[] = [];
         let scoutingPlays: Play[] = [];
@@ -1977,14 +2194,15 @@ function Router() {
         }
 
         setDataState(current => {
-          // If we fetched new plays from Supabase, use them. Otherwise, keep whatever was locally cached (current.gameData[activeGameId]), or empty arrays.
+          // Supabase is authoritative for Live Game plays. An empty result means
+          // this game has no saved live plays; don't resurrect another game's browser cache.
           const localActiveGame = current.gameData?.[activeGameId] || { scouting: [], live: [] };
-          
+
           const gameData = {
             ...(current.gameData || {}),
             [activeGameId]: {
               scouting: scoutingPlays.length > 0 ? scoutingPlays : localActiveGame.scouting,
-              live: livePlays.length > 0 ? livePlays : localActiveGame.live,
+              live: isSupabaseConfigured ? livePlays : localActiveGame.live,
             },
           };
           const nextDataset: Dataset = {
@@ -2034,7 +2252,6 @@ function Router() {
 
   return (
     <AppShell data={data} setData={setData}>
-      <HudlCsvExportBar />
       <Switch>
         <Route path="/"><Dashboard data={data} setData={setData} /></Route>
         <Route path="/upload"><UploadPage data={data} setData={setData} /></Route>
