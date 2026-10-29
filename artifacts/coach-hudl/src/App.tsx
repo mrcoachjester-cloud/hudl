@@ -354,9 +354,11 @@ function AppShell({ children, data, setData }: { children: ReactNode; data: Data
           <div className="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 40 44" role="img" focusable="false">
               <path d="M20 2 36 8v13c0 9-6.5 16-16 21C10.5 37 4 30 4 21V8L20 2Z" fill="#101820" stroke="#168BFF" strokeWidth="2.5" />
-              <path d="M12 11h16v5h-5v15h-6V16h-5z" fill="#F4F7FB" />
-              <path d="M11 23c5-3 13-3 18 0" fill="none" stroke="#168BFF" strokeWidth="2" />
-              <path d="M16 22v4m4-5v5m4-4v4" stroke="#F4F7FB" strokeWidth="1.5" />
+              <g transform="rotate(-34 20 23)">
+                <ellipse cx="20" cy="23" rx="6.5" ry="11" fill="#F4F7FB" stroke="#168BFF" strokeWidth="1.4" />
+                <path d="M20 13v20" stroke="#101820" strokeWidth="1.3" />
+                <path d="M17.5 19h5m-5 4h5m-5 4h5" stroke="#101820" strokeWidth="1.3" strokeLinecap="round" />
+              </g>
             </svg>
           </div>
           <div className="brand-name">
