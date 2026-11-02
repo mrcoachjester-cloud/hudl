@@ -796,35 +796,26 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
               </Link>
             }
           />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 18 }}>
-            <div>
-              <div className="eyebrow" style={{ textAlign: 'center', marginBottom: 6 }}>Run %</div>
-              <div className="bar-chart" style={{ height: 150, gap: 6 }}>
-                {downGroups.map(d => (
-                  <div className="bar-col" key={`run-${d.down}`}>
+          <div className="bar-chart" style={{ height: 180, gap: 12, alignItems: 'stretch' }}>
+            {downGroups.map(d => (
+              <div key={d.down} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'end', alignItems: 'center', gap: 7 }}>
+                <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'center', gap: 5, width: '100%', flex: 1 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 4, height: '100%', flex: 1, minWidth: 0 }}>
                     <span className="bar-value">{d.total ? `${d.runPct}%` : '—'}</span>
-                    <div className="bar" style={{ height: `${d.runPct}%`, minHeight: d.total ? 4 : 0 }} />
-                    <span className="bar-label">
-                      {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
-                    </span>
+                    <div className="bar" style={{ height: `${d.runPct}%`, minHeight: d.total ? 4 : 0, background: 'linear-gradient(180deg, #ad82ff, #5e408e)' }} />
+                    <span className="bar-label">R</span>
                   </div>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="eyebrow" style={{ textAlign: 'center', marginBottom: 6 }}>Pass %</div>
-              <div className="bar-chart" style={{ height: 150, gap: 6 }}>
-                {downGroups.map(d => (
-                  <div className="bar-col" key={`pass-${d.down}`}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 4, height: '100%', flex: 1, minWidth: 0 }}>
                     <span className="bar-value">{d.total ? `${d.passPct}%` : '—'}</span>
                     <div className="bar" style={{ height: `${d.passPct}%`, minHeight: d.total ? 4 : 0, background: 'linear-gradient(180deg, #55dfab, #247c5e)' }} />
-                    <span className="bar-label">
-                      {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
-                    </span>
+                    <span className="bar-label">P</span>
                   </div>
-                ))}
+                </div>
+                <span className="bar-label" style={{ fontWeight: 700 }}>
+                  {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'} Down
+                </span>
               </div>
-            </div>
+            ))}
           </div>
 
           <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid hsl(var(--border))', display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
