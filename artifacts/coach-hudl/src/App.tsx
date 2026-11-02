@@ -1050,6 +1050,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
           targetScoutId = session.id;
         }
         await appendScoutingPlays(targetScoutId, parsed);
+        if (targetScoutId === scoutId) setScoutPlayCount(current => current + parsed.length);
         const scouting = await getScoutingPlaysForTeam(seasonYear, effectiveTeam);
         setData({ ...data, activeTeam: effectiveTeam, scouting });
         toast.notify(parsed.length + ' plays saved under ' + team + ' · ' + (scouts.find(s => s.id === targetScoutId)?.description ?? newScoutName));
