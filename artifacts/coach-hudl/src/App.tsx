@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, clearScoutingFile, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
 import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
@@ -985,6 +985,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   const [scoutId, setScoutId] = useState('new');
   const [newScoutName, setNewScoutName] = useState('Scout File');
   const [preview, setPreview] = useState<Play[]>([]);
+  const [scoutPlayCount, setScoutPlayCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
@@ -1066,6 +1067,42 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
     reader.readAsText(file);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSelectedScoutCount() {
+      if (!scoutId || scoutId === 'new') { setScoutPlayCount(0); return; }
+      try {
+        const plays = await getScoutingPlays(scoutId);
+        if (!cancelled) setScoutPlayCount(plays.length);
+      } catch (error) {
+        console.error('Could not load Scout File rows:', error);
+        if (!cancelled) setScoutPlayCount(0);
+      }
+    }
+    void loadSelectedScoutCount();
+    return () => { cancelled = true; };
+  }, [scoutId]);
+
+  const clearSelectedScout = async () => {
+    if (!selectedScout || !scoutPlayCount) return;
+    const confirmed = window.confirm(`Delete all ${scoutPlayCount} plays from "${selectedScout.description || 'Scout File'}"? The Scout File itself will remain so you can upload the corrected CSV into it.`);
+    if (!confirmed) return;
+    setLoading(true);
+    try {
+      await clearScoutingFile(scoutId);
+      setScoutPlayCount(0);
+      setPreview([]);
+      const scouting = await getScoutingPlaysForTeam(seasonYear, effectiveTeam);
+      setData({ ...data, activeTeam: effectiveTeam, scouting });
+      toast.notify('Scout File cleared. Upload the corrected CSV when ready.');
+    } catch (error) {
+      console.error('Could not clear Scout File:', error);
+      toast.notify(error instanceof Error ? error.message : 'Could not clear Scout File');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const selectedScout = scouts.find(scout => scout.id === scoutId);
   return <div className="content">
     <PageHead eyebrow="Data room · scouting files" title="Organize the opponent." description="Choose a Scouting team, choose its Scout File, then upload the scouting data into that file. Live Game teams are intentionally kept out of this workflow. Live Game data stays separate." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Upload Data</button>} />
@@ -1079,6 +1116,10 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
         <button className="btn btn-primary" disabled={!effectiveTeam || loading} onClick={() => fileRef.current?.click()} data-testid="button-data-room-upload"><UploadCloud /> {loading ? 'Saving…' : 'Upload Data'}</button>
       </div>
       <div className="callout" style={{ marginTop: 16 }}><Shield /><span><strong>{effectiveTeam || 'No scouting team selected'}</strong>{selectedScout ? ' · ' + (selectedScout.description || 'Scout File') : team ? ' · New Scout File' : ''} — scouting data is stored independently from Live Game charting.</span></div>
+      {selectedScout && <div className="callout" style={{ marginTop: 10, justifyContent: 'space-between', gap: 12 }}>
+        <span><FileSpreadsheet /><strong>{selectedScout.description || 'Scout File'}</strong> · {scoutPlayCount.toLocaleString()} plays saved · Added {new Date(selectedScout.created_at).toLocaleDateString()}</span>
+        <button className="btn btn-danger" disabled={loading || scoutPlayCount === 0} onClick={clearSelectedScout} data-testid="button-clear-scout-file"><Trash2 /> Clear File</button>
+      </div>}
     </Panel>
     <Panel pad={false}>
       <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Normalized preview" detail={preview.length ? 'Showing ' + preview.length + ' imported rows' : 'Your uploaded rows will appear here'} /></div>
