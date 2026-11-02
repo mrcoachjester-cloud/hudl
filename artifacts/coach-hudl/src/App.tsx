@@ -568,7 +568,7 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
       runs: dRuns.length,
       passes: dPasses.length,
       runPct: dRunPct,
-      passPct: 100 - dRunPct,
+      passPct: dPlays.length ? 100 - dRunPct : 0,
       avg: average(dPlays),
     };
   });
@@ -789,27 +789,43 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         {/* Down & Distance Profile */}
         <Panel>
           <SectionTitle
-            title="Down & distance profile"
-            detail="Snap count & Run/Pass distribution by down"
+            title="Run & pass tendency by down"
+            detail="Two side-by-side percentage charts"
             link={
               <Link href="/scout" className="tiny-link" data-testid="link-dashboard-down-profile">
                 Full breakdown
               </Link>
             }
           />
-          <div className="bar-chart" style={{ height: 180 }}>
-            {downGroups.map(d => (
-              <div className="bar-col" key={d.down}>
-                <span className="bar-value">
-                  {d.total} <small style={{ opacity: 0.7 }}>({d.runPct}% R)</small>
-                </span>
-                <div className="bar" style={{ height: `${Math.max(10, (d.total / maxDownCount) * 120)}px` }} />
-                <span className="bar-label">
-                  {d.down}
-                  {d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
-                </span>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 18 }}>
+            <div>
+              <div className="eyebrow" style={{ textAlign: 'center', marginBottom: 6 }}>Run %</div>
+              <div className="bar-chart" style={{ height: 150, gap: 6 }}>
+                {downGroups.map(d => (
+                  <div className="bar-col" key={`run-${d.down}`}>
+                    <span className="bar-value">{d.total ? `${d.runPct}%` : '—'}</span>
+                    <div className="bar" style={{ height: `${d.runPct}%`, minHeight: d.total ? 4 : 0 }} />
+                    <span className="bar-label">
+                      {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div>
+              <div className="eyebrow" style={{ textAlign: 'center', marginBottom: 6 }}>Pass %</div>
+              <div className="bar-chart" style={{ height: 150, gap: 6 }}>
+                {downGroups.map(d => (
+                  <div className="bar-col" key={`pass-${d.down}`}>
+                    <span className="bar-value">{d.total ? `${d.passPct}%` : '—'}</span>
+                    <div className="bar" style={{ height: `${d.passPct}%`, minHeight: d.total ? 4 : 0, background: 'linear-gradient(180deg, #55dfab, #247c5e)' }} />
+                    <span className="bar-label">
+                      {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
 
           <div style={{ marginTop: 18, paddingTop: 14, borderTop: '1px solid hsl(var(--border))', display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
