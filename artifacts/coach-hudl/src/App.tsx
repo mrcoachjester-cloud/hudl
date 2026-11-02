@@ -572,7 +572,6 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
       avg: average(dPlays),
     };
   });
-  const maxDownCount = Math.max(...downGroups.map(d => d.total), 1);
 
   // Formations Breakdown
   const uniqueFormations = Array.from(new Set(plays.map(p => p.form).filter(f => f && f !== '—')));
