@@ -2100,6 +2100,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       const line = game.stats[player.id];
       if (line) statColumns.forEach(column => { total[column.key] += Number(line[column.key] || 0); });
     });
+    total.totalTackles = total.soloTackles + total.assistedTackles;
     return { player, total };
   });
   const inputStyle: CSSProperties = { width: '100%', minWidth: 48, boxSizing: 'border-box', padding: '7px 5px', border: '1px solid hsl(var(--border))', borderRadius: 5, background: 'hsl(var(--background))', color: 'hsl(var(--foreground))', fontSize: 13 };
