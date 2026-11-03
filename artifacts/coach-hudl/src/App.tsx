@@ -1868,7 +1868,7 @@ type PlayerStatLine = {
   rushingCarries: number; rushingYards: number; rushingTd: number; fumbles: number;
   passAttempts: number; passCompletions: number; passYards: number; passTd: number; interceptions: number;
   targets: number; receptions: number; receivingYards: number; receivingTd: number;
-  soloTackles: number; assistedTackles: number; tacklesForLoss: number; sacks: number;
+  soloTackles: number; assistedTackles: number; totalTackles: number; tacklesForLoss: number; sacks: number;
   defensiveInterceptions: number; passBreakups: number; forcedFumbles: number; fumbleRecoveries: number;
   qbHurries: number; defensiveTd: number;
 };
@@ -1882,7 +1882,7 @@ const blankStatLine = (): PlayerStatLine => ({
   rushingCarries: 0, rushingYards: 0, rushingTd: 0, fumbles: 0,
   passAttempts: 0, passCompletions: 0, passYards: 0, passTd: 0, interceptions: 0,
   targets: 0, receptions: 0, receivingYards: 0, receivingTd: 0,
-  soloTackles: 0, assistedTackles: 0, tacklesForLoss: 0, sacks: 0,
+  soloTackles: 0, assistedTackles: 0, totalTackles: 0, tacklesForLoss: 0, sacks: 0,
   defensiveInterceptions: 0, passBreakups: 0, forcedFumbles: 0, fumbleRecoveries: 0,
   qbHurries: 0, defensiveTd: 0,
 });
@@ -1904,7 +1904,7 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
   { key: 'interceptions', label: 'INT', group: 'Passing' }, { key: 'targets', label: 'Tgt', group: 'Receiving' },
   { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
   { key: 'receivingTd', label: 'TD', group: 'Receiving' },
-  { key: 'soloTackles', label: 'Solo', group: 'Defense' }, { key: 'assistedTackles', label: 'Ast', group: 'Defense' },
+  { key: 'soloTackles', label: 'Solo', group: 'Defense' }, { key: 'assistedTackles', label: 'Ast', group: 'Defense' }, { key: 'totalTackles', label: 'Tot', group: 'Defense' },
   { key: 'tacklesForLoss', label: 'TFL', group: 'Defense' }, { key: 'sacks', label: 'Sack', group: 'Defense' },
   { key: 'defensiveInterceptions', label: 'INT', group: 'Defense' }, { key: 'passBreakups', label: 'PBU', group: 'Defense' },
   { key: 'forcedFumbles', label: 'FF', group: 'Defense' }, { key: 'fumbleRecoveries', label: 'FR', group: 'Defense' },
@@ -2121,7 +2121,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
                 <span style={{ display: 'inline-block', color: '#58aaff', fontWeight: 800, marginRight: 5 }}>#{player.jersey}</span>{player.name && <span>{player.name}</span>}
               </td>
               {visibleColumns.map(column => <td key={column.key} style={{ ...cellStyle, padding: '5px 3px' }}>
-                {editable ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" inputMode="numeric" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 0, padding: '9px 2px', fontSize: 16, minHeight: 40 }} /> : (line[column.key] || 0)}
+                {editable && column.key !== 'totalTackles' ? <input aria-label={'#' + player.jersey + ' ' + column.group + ' ' + column.label} type="number" inputMode="numeric" step="1" value={line[column.key] === 0 ? '' : line[column.key]} placeholder="0" onChange={event => updateLine(player.id, column.key, event.target.value)} style={{ ...inputStyle, textAlign: 'center', minWidth: 0, padding: '9px 2px', fontSize: 16, minHeight: 40 }} /> : (column.key === 'totalTackles' ? Number(line.soloTackles || 0) + Number(line.assistedTackles || 0) : (line[column.key] || 0))}
               </td>)}
             </tr>)}
             {rows.length > 0 && <tr style={{ background: 'hsl(var(--muted))', fontWeight: 800 }}>
