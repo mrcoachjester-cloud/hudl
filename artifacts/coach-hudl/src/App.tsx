@@ -1870,7 +1870,7 @@ type PlayerStatLine = {
   targets: number; receptions: number; receivingYards: number; receivingTd: number;
   soloTackles: number; assistedTackles: number; totalTackles: number; tacklesForLoss: number; sacks: number;
   defensiveInterceptions: number; passBreakups: number; forcedFumbles: number; fumbleRecoveries: number;
-  qbHurries: number; defensiveTd: number;
+  qbHurries: number; defensiveTd: number; bigHits: number; blockedKicks: number;
 };
 type StatsPlayer = { id: string; jersey: string; name: string };
 type PassEvent = { id: string; qbId: string; outcome: 'complete' | 'incomplete' | 'interception'; receiverId: string; yards: number; td: boolean };
@@ -1884,7 +1884,7 @@ const blankStatLine = (): PlayerStatLine => ({
   targets: 0, receptions: 0, receivingYards: 0, receivingTd: 0,
   soloTackles: 0, assistedTackles: 0, totalTackles: 0, tacklesForLoss: 0, sacks: 0,
   defensiveInterceptions: 0, passBreakups: 0, forcedFumbles: 0, fumbleRecoveries: 0,
-  qbHurries: 0, defensiveTd: 0,
+  qbHurries: 0, defensiveTd: 0, bigHits: 0, blockedKicks: 0,
 });
 const loadPlayerStats = (): PlayerStatsStore => {
   try {
@@ -1904,11 +1904,12 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
   { key: 'interceptions', label: 'INT', group: 'Passing' }, { key: 'targets', label: 'Tgt', group: 'Receiving' },
   { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
   { key: 'receivingTd', label: 'TD', group: 'Receiving' },
-  { key: 'soloTackles', label: 'Solo', group: 'Defense' }, { key: 'assistedTackles', label: 'Ast', group: 'Defense' }, { key: 'totalTackles', label: 'Tot', group: 'Defense' },
+  { key: 'soloTackles', label: 'Tackles', group: 'Defense' }, { key: 'assistedTackles', label: 'Assists', group: 'Defense' }, { key: 'totalTackles', label: 'Total', group: 'Defense' },
   { key: 'tacklesForLoss', label: 'TFL', group: 'Defense' }, { key: 'sacks', label: 'Sack', group: 'Defense' },
-  { key: 'defensiveInterceptions', label: 'INT', group: 'Defense' }, { key: 'passBreakups', label: 'PBU', group: 'Defense' },
-  { key: 'forcedFumbles', label: 'FF', group: 'Defense' }, { key: 'fumbleRecoveries', label: 'FR', group: 'Defense' },
-  { key: 'qbHurries', label: 'Hurry', group: 'Defense' }, { key: 'defensiveTd', label: 'TD', group: 'Defense' },
+  { key: 'forcedFumbles', label: 'Cause Fum', group: 'Defense' }, { key: 'fumbleRecoveries', label: 'Rec Fum', group: 'Defense' },
+  { key: 'qbHurries', label: 'QB Knockdown', group: 'Defense' }, { key: 'passBreakups', label: 'PBU', group: 'Defense' },
+  { key: 'defensiveInterceptions', label: 'INT', group: 'Defense' }, { key: 'bigHits', label: 'OOH!! Big Hit', group: 'Defense' },
+  { key: 'defensiveTd', label: 'Score On Defense', group: 'Defense' }, { key: 'blockedKicks', label: 'Blocked Kick', group: 'Defense' },
 ];
 function PlayerStatsPage({ data }: { data: Dataset }) {
   const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
