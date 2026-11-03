@@ -1,5 +1,5 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
-import { appendScoutingPlays, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
+import { appendScoutingPlays, clearScoutingFile, createGame, createScoutingSession, getGames, getLivePlays, getScoutingSessions, getScoutingPlays, getSeasons, livePlayToStandard, scoutingPlayToStandard, type StandardPlay } from './lib/footballData';
 import { getScoutingPlaysForTeam, getScoutingTeamNames } from './lib/teamData';
 import { parseHudlCsv } from './lib/hudlCsv';
 import { isSupabaseConfigured } from './lib/supabase';
@@ -600,11 +600,10 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
       runs: dRuns.length,
       passes: dPasses.length,
       runPct: dRunPct,
-      passPct: 100 - dRunPct,
+      passPct: dPlays.length ? 100 - dRunPct : 0,
       avg: average(dPlays),
     };
   });
-  const maxDownCount = Math.max(...downGroups.map(d => d.total), 1);
 
   // Formations Breakdown
   const uniqueFormations = Array.from(new Set(plays.map(p => p.form).filter(f => f && f !== '—')));
@@ -821,24 +820,31 @@ function Dashboard({ data, setData }: { data: Dataset; setData?: (data: Dataset)
         {/* Down & Distance Profile */}
         <Panel>
           <SectionTitle
-            title="Down & distance profile"
-            detail="Snap count & Run/Pass distribution by down"
+            title="Run & pass tendency by down"
+            detail="Two side-by-side percentage charts"
             link={
               <Link href="/scout" className="tiny-link" data-testid="link-dashboard-down-profile">
                 Full breakdown
               </Link>
             }
           />
-          <div className="bar-chart" style={{ height: 180 }}>
+          <div className="bar-chart" style={{ height: 180, gap: 12, alignItems: 'stretch' }}>
             {downGroups.map(d => (
-              <div className="bar-col" key={d.down}>
-                <span className="bar-value">
-                  {d.total} <small style={{ opacity: 0.7 }}>({d.runPct}% R)</small>
-                </span>
-                <div className="bar" style={{ height: `${Math.max(10, (d.total / maxDownCount) * 120)}px` }} />
-                <span className="bar-label">
-                  {d.down}
-                  {d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'}
+              <div key={d.down} style={{ flex: 1, minWidth: 0, height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'end', alignItems: 'center', gap: 7 }}>
+                <div style={{ display: 'flex', alignItems: 'end', justifyContent: 'center', gap: 5, width: '100%', flex: 1 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 4, height: '100%', flex: 1, minWidth: 0 }}>
+                    <span className="bar-value">{d.total ? `${d.runPct}%` : '—'}</span>
+                    <div className="bar" style={{ height: `${d.runPct}%`, minHeight: d.total ? 4 : 0, background: 'linear-gradient(180deg, #ad82ff, #5e408e)' }} />
+                    <span className="bar-label">R</span>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'end', gap: 4, height: '100%', flex: 1, minWidth: 0 }}>
+                    <span className="bar-value">{d.total ? `${d.passPct}%` : '—'}</span>
+                    <div className="bar" style={{ height: `${d.passPct}%`, minHeight: d.total ? 4 : 0, background: 'linear-gradient(180deg, #55dfab, #247c5e)' }} />
+                    <span className="bar-label">P</span>
+                  </div>
+                </div>
+                <span className="bar-label" style={{ fontWeight: 700 }}>
+                  {d.down}{d.down === '1' ? 'st' : d.down === '2' ? 'nd' : d.down === '3' ? 'rd' : 'th'} Down
                 </span>
               </div>
             ))}
@@ -1030,6 +1036,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
   const [scoutId, setScoutId] = useState('new');
   const [newScoutName, setNewScoutName] = useState('Scout File');
   const [preview, setPreview] = useState<Play[]>([]);
+  const [scoutPlayCount, setScoutPlayCount] = useState(0);
   const [loading, setLoading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const toast = useToast();
@@ -1094,6 +1101,7 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
           targetScoutId = session.id;
         }
         await appendScoutingPlays(targetScoutId, parsed);
+        if (targetScoutId === scoutId) setScoutPlayCount(current => current + parsed.length);
         const scouting = await getScoutingPlaysForTeam(seasonYear, effectiveTeam);
         setData({ ...data, activeTeam: effectiveTeam, scouting });
         toast.notify(parsed.length + ' plays saved under ' + team + ' · ' + (scouts.find(s => s.id === targetScoutId)?.description ?? newScoutName));
@@ -1111,6 +1119,42 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
     reader.readAsText(file);
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSelectedScoutCount() {
+      if (!scoutId || scoutId === 'new') { setScoutPlayCount(0); return; }
+      try {
+        const plays = await getScoutingPlays(scoutId);
+        if (!cancelled) setScoutPlayCount(plays.length);
+      } catch (error) {
+        console.error('Could not load Scout File rows:', error);
+        if (!cancelled) setScoutPlayCount(0);
+      }
+    }
+    void loadSelectedScoutCount();
+    return () => { cancelled = true; };
+  }, [scoutId]);
+
+  const clearSelectedScout = async () => {
+    if (!selectedScout || !scoutPlayCount) return;
+    const confirmed = window.confirm(`Delete all ${scoutPlayCount} plays from "${selectedScout.description || 'Scout File'}"? The Scout File itself will remain so you can upload the corrected CSV into it.`);
+    if (!confirmed) return;
+    setLoading(true);
+    try {
+      await clearScoutingFile(scoutId);
+      setScoutPlayCount(0);
+      setPreview([]);
+      const scouting = await getScoutingPlaysForTeam(seasonYear, effectiveTeam);
+      setData({ ...data, activeTeam: effectiveTeam, scouting });
+      toast.notify('Scout File cleared. Upload the corrected CSV when ready.');
+    } catch (error) {
+      console.error('Could not clear Scout File:', error);
+      toast.notify(error instanceof Error ? error.message : 'Could not clear Scout File');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const selectedScout = scouts.find(scout => scout.id === scoutId);
   return <div className="content">
     <PageHead eyebrow="Data room · scouting files" title="Organize the opponent." description="Choose a Scouting team, choose its Scout File, then upload the scouting data into that file. Live Game teams are intentionally kept out of this workflow. Live Game data stays separate." actions={<button className="btn btn-primary" onClick={() => fileRef.current?.click()} data-testid="button-upload-top"><UploadCloud /> Upload Data</button>} />
@@ -1124,6 +1168,10 @@ function UploadPage({ data, setData }: { data: Dataset; setData: (data: Dataset)
         <button className="btn btn-primary" disabled={!effectiveTeam || loading} onClick={() => fileRef.current?.click()} data-testid="button-data-room-upload"><UploadCloud /> {loading ? 'Saving…' : 'Upload Data'}</button>
       </div>
       <div className="callout" style={{ marginTop: 16 }}><Shield /><span><strong>{effectiveTeam || 'No scouting team selected'}</strong>{selectedScout ? ' · ' + (selectedScout.description || 'Scout File') : team ? ' · New Scout File' : ''} — scouting data is stored independently from Live Game charting.</span></div>
+      {selectedScout && <div className="callout" style={{ marginTop: 10, justifyContent: 'space-between', gap: 12 }}>
+        <span><FileSpreadsheet /><strong>{selectedScout.description || 'Scout File'}</strong> · {scoutPlayCount.toLocaleString()} plays saved · Added {new Date(selectedScout.created_at).toLocaleDateString()}</span>
+        <button className="btn btn-danger" disabled={loading || scoutPlayCount === 0} onClick={clearSelectedScout} data-testid="button-clear-scout-file"><Trash2 /> Clear File</button>
+      </div>}
     </Panel>
     <Panel pad={false}>
       <div style={{ padding: '21px 21px 0' }}><SectionTitle title="Normalized preview" detail={preview.length ? 'Showing ' + preview.length + ' imported rows' : 'Your uploaded rows will appear here'} /></div>
