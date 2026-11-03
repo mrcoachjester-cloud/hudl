@@ -1868,6 +1868,9 @@ type PlayerStatLine = {
   rushingCarries: number; rushingYards: number; rushingTd: number; fumbles: number;
   passAttempts: number; passCompletions: number; passYards: number; passTd: number; interceptions: number;
   targets: number; receptions: number; receivingYards: number; receivingTd: number;
+  soloTackles: number; assistedTackles: number; tacklesForLoss: number; sacks: number;
+  defensiveInterceptions: number; passBreakups: number; forcedFumbles: number; fumbleRecoveries: number;
+  qbHurries: number; defensiveTd: number;
 };
 type StatsPlayer = { id: string; jersey: string; name: string };
 type PassEvent = { id: string; qbId: string; outcome: 'complete' | 'incomplete' | 'interception'; receiverId: string; yards: number; td: boolean };
@@ -1879,6 +1882,9 @@ const blankStatLine = (): PlayerStatLine => ({
   rushingCarries: 0, rushingYards: 0, rushingTd: 0, fumbles: 0,
   passAttempts: 0, passCompletions: 0, passYards: 0, passTd: 0, interceptions: 0,
   targets: 0, receptions: 0, receivingYards: 0, receivingTd: 0,
+  soloTackles: 0, assistedTackles: 0, tacklesForLoss: 0, sacks: 0,
+  defensiveInterceptions: 0, passBreakups: 0, forcedFumbles: 0, fumbleRecoveries: 0,
+  qbHurries: 0, defensiveTd: 0,
 });
 const loadPlayerStats = (): PlayerStatsStore => {
   try {
@@ -1898,11 +1904,16 @@ const statColumns: { key: keyof PlayerStatLine; label: string; group: string }[]
   { key: 'interceptions', label: 'INT', group: 'Passing' }, { key: 'targets', label: 'Tgt', group: 'Receiving' },
   { key: 'receptions', label: 'Rec', group: 'Receiving' }, { key: 'receivingYards', label: 'Yds', group: 'Receiving' },
   { key: 'receivingTd', label: 'TD', group: 'Receiving' },
+  { key: 'soloTackles', label: 'Solo', group: 'Defense' }, { key: 'assistedTackles', label: 'Ast', group: 'Defense' },
+  { key: 'tacklesForLoss', label: 'TFL', group: 'Defense' }, { key: 'sacks', label: 'Sack', group: 'Defense' },
+  { key: 'defensiveInterceptions', label: 'INT', group: 'Defense' }, { key: 'passBreakups', label: 'PBU', group: 'Defense' },
+  { key: 'forcedFumbles', label: 'FF', group: 'Defense' }, { key: 'fumbleRecoveries', label: 'FR', group: 'Defense' },
+  { key: 'qbHurries', label: 'Hurry', group: 'Defense' }, { key: 'defensiveTd', label: 'TD', group: 'Defense' },
 ];
 function PlayerStatsPage({ data }: { data: Dataset }) {
   const [store, setStore] = useState<PlayerStatsStore>(() => loadPlayerStats());
   const [view, setView] = useState<'game' | 'season'>('game');
-  const [statGroup, setStatGroup] = useState<'Rushing' | 'Pass / Receive'>('Rushing');
+  const [statGroup, setStatGroup] = useState<'Rushing' | 'Pass / Receive' | 'Defense'>('Rushing');
   const [selectedGameId, setSelectedGameId] = useState(() => loadPlayerStats().games[0]?.id ?? '');
   const [newJersey, setNewJersey] = useState('');
   const [newName, setNewName] = useState('');
@@ -2124,7 +2135,7 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
   );
   const currentRows = store.players.map(player => ({ player, line: selectedGame?.stats[player.id] ?? blankStatLine() }));
   return <div className="content">
-    <PageHead eyebrow="Standalone tool · player statistics" title="Player Stats" description="A spreadsheet-style stat sheet for individual offensive production. Independent of Live Game charting and Scouting." />
+    <PageHead eyebrow="Standalone tool · player statistics" title="Player Stats" description="Game and season stat sheets for offensive and defensive player production. Independent of Live Game charting and Scouting." />
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 }}>
       <button className={'btn ' + (view === 'game' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('game')}>Game Stats</button>
       <button className={'btn ' + (view === 'season' ? 'btn-primary' : 'btn-ghost')} onClick={() => setView('season')}>Season Stats</button>
@@ -2144,10 +2155,10 @@ function PlayerStatsPage({ data }: { data: Dataset }) {
       <button className="btn btn-primary" onClick={addGame}>Create Game</button>
     </div></Panel>}
     <div role="group" aria-label="Stat category" style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 6, marginBottom: 12 }}>
-      {(['Rushing', 'Pass / Receive'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
+      {(['Rushing', 'Pass / Receive', 'Defense'] as const).map(group => <button key={group} className={'btn ' + (statGroup === group ? 'btn-primary' : 'btn-ghost')} onClick={() => setStatGroup(group)} style={{ minHeight: 44, padding: '9px 5px', fontSize: 13 }}>{group}</button>)}
     </div>
     {view === 'game' ? <Panel>
-      <SectionTitle title="Game Stats" detail={statGroup === 'Pass / Receive' ? 'Log each pass play above. The table below shows the automatically updated passing and receiving totals.' : 'Enter totals by player. Use the jersey number as a quick reference.'} />
+      <SectionTitle title="Game Stats" detail={statGroup === 'Defense' ? 'Enter post-game defensive totals by player. Total tackles are calculated from solo and assisted tackles.' : statGroup === 'Pass / Receive' ? 'Log each pass play above. The table below shows the automatically updated passing and receiving totals.' : 'Enter totals by player. Use the jersey number as a quick reference.'} />
       {activeTeamName ? <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12, padding: '10px 12px', border: '1px solid hsl(var(--border))', borderRadius: 8 }}>
         <span style={{ fontWeight: 750 }}>Selected above:</span>
         <span style={{ color: '#58aaff', fontWeight: 750 }}>{activeTeamName}</span>
